@@ -8,6 +8,8 @@
 **/test-results/
 *.pt
 *.pth
+# Small, frozen inference-only ensemble shipped with the application.
+!/models/acceleration_speed/seed*.pt
 *.onnx
 *.npz
 *.npy

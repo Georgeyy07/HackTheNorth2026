@@ -96,3 +96,19 @@ def test_environment_paths_and_optional_profiles_are_resolved(replay, tmp_path, 
     assert value['profile']['id'] == 'smoothed'
     assert value['updates'][0]['probability'] == .4
     assert client.get('/api/updates/kaggle_fixture?profile=smoothed').status_code == 200
+
+
+def test_filtered_export_is_labeled_and_cannot_use_stale_external_profiles(replay, tmp_path):
+    _, export, manifest = replay
+    config = dict(kind='kalman', space='probability', q_over_r=3.2, onset=.7, offset=.5)
+    manifest.update(score_filter_applied=True, alert_filter=config)
+    (export / 'manifest.json').write_text(json.dumps(manifest))
+    filters = tmp_path / 'old_filters'
+    filters.mkdir()
+    (filters / 'viewer_profiles.json').write_text(json.dumps(dict(profiles=[dict(id='wrong_model')])))
+    client = TestClient(create_app(export, filters))
+    profile = client.get('/api/catalog').json()['profiles'][0]
+    assert profile['label'] == 'Kalman + hysteresis' and profile['applied_in_export']
+    assert profile['config'] == config
+    assert client.get('/api/session/kaggle_fixture?profile=wrong_model').status_code == 404
+    assert client.get('/api/session/kaggle_fixture').status_code == 200

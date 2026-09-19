@@ -3,6 +3,7 @@ from road_training.timeline_stream import RoadTimelineStream
 
 
 class Toy(torch.nn.Module):
+    channels = 7
     def __init__(self):super().__init__();self.anchor=torch.nn.Parameter(torch.zeros(()))
     def forward(self,x,mask):
         values=x[:,::16,0]

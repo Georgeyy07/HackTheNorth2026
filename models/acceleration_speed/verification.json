@@ -1,0 +1,29 @@
+{
+  "cuda_device": "NVIDIA GeForce RTX 5090",
+  "precision": "bfloat16 autocast; FP32 instance statistics",
+  "gyro_input": false,
+  "statistics_mode": "both",
+  "source_tensor_parity": true,
+  "rolling_kaggle_samples": 1607,
+  "final_patches": 98,
+  "provisional_patches": 3,
+  "max_probability_difference_vs_original_fixed_kalman": 1.3877787807814457e-17,
+  "max_iri_difference_vs_original_fixed_kalman": 0.0,
+  "real_dataset_forward_checks": [
+    "kaggle",
+    "lira",
+    "roadsens"
+  ],
+  "augmented_training_smoke": {
+    "total": 0.1228337362408638,
+    "roughness": 0.4912293255329132,
+    "disturbance": 2.6408282792544924e-05,
+    "roughness_patches": 50,
+    "disturbance_patches": 111,
+    "optimizer_updates": 1
+  },
+  "weights_modified_on_disk": false,
+  "scope": "Short correctness smoke; no new full evaluation or training run",
+  "python_tests_passed": 203,
+  "javascript_replay_tests_passed": 5
+}

@@ -128,13 +128,14 @@ def section_metrics(rows):
                 rows=output)
 
 
-def evaluate(checkpoint, output, split='val', *, encoder_class=PatchTST, model_class=PatchTSTRoadModel):
+def evaluate(checkpoint, output, split='val', *, encoder_class=PatchTST, model_class=PatchTSTRoadModel,
+             dataset_class=RoadDataset):
     if split not in ('val','test'):raise ValueError('Held-out evaluation requires val or test')
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
     config = saved["config"];root = Path(config["data_root"])
     if sha(root/"manifest.json") != config["manifest_sha256"]:
         raise ValueError("Checkpoint dataset changed")
-    data = RoadDataset(root, source="real", split=split, stride=1024, window_size=1024, return_labels=True)
+    data = dataset_class(root, source="real", split=split, stride=1024, window_size=1024, return_labels=True)
     selected, _, _ = supervised_windows(data, 16)
     model = model_class(encoder_class(**config["encoder_config"]))
     model.load_state_dict(saved["model_state"]);model.to("cuda").eval()
@@ -154,8 +155,8 @@ def evaluate(checkpoint, output, split='val', *, encoder_class=PatchTST, model_c
                 for j in np.flatnonzero(rv):
                     roughness[(recording, int(section[i, j]))].append((float(pred[i, j]), float(targets["roughness"][i, j])))
                 if batch["dataset"][i] == "kaggle":
-                    speed = batch["x"][i, :, 6].numpy().reshape(-1, 16)
-                    speed_valid = batch["mask"][i, :, 6].numpy().reshape(-1, 16).all(1)
+                    speed = batch["x"][i, :, -1].numpy().reshape(-1, 16)
+                    speed_valid = batch["mask"][i, :, -1].numpy().reshape(-1, 16).all(1)
                     dv = targets["disturbance_valid"][i].numpy()
                     truth = targets["disturbance"][i].numpy()
                     for j in range(len(starts[i])):

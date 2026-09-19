@@ -14,6 +14,7 @@ CONFIG = dict(defect_blend="recent", roughness_blend="latest", onset=.6,
 
 
 class ContextModel(torch.nn.Module):
+    channels = 7
     """Depends on all observed context so a lookahead error changes predictions."""
     def __init__(self):
         super().__init__()

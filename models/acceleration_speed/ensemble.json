@@ -1,0 +1,49 @@
+{
+  "checkpoints": {
+    "seed52.pt": "d34c881e929a5a61a3f944e776e6888962efef4580331585fc1383c02afa0f75",
+    "seed53.pt": "1aacc777da9d777714fcaa841c545eb7c519263eef8ed432359f1d63baa0c588",
+    "seed54.pt": "a422546ace98920d827dd7b5accf60e1fca67dfa4e2c327da0caecbc542e989a",
+    "seed55.pt": "f2a0b1ba7df3b818e35c08a0a62eff7801f03940114316df05b96a0bad3ca35c"
+  },
+  "seeds": [
+    52,
+    53,
+    54,
+    55
+  ],
+  "input_channels": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "speed"
+  ],
+  "aggregation": "Equal mean of sigmoid disturbance probabilities and IRI",
+  "normalization": "Masked per-window instance normalization plus statistics for both heads",
+  "window_samples": 1024,
+  "patch_samples": 16,
+  "sample_rate_hz": 100,
+  "source_plan_sha256": "2bebb1b3e3b3726f4167d0f1105068886cb369018116b33019adb61c945a8685",
+  "provenance": {
+    "52": {
+      "source_checkpoint_sha256": "126eba0a6b2995a52c3d56ae789492d4fd74899fdf0b129fd1173a80d01e2255",
+      "joint_epoch": 5,
+      "roughness_adaptation_epoch": 12
+    },
+    "53": {
+      "source_checkpoint_sha256": "059d1e09cb004b0d6a3a2ae39f4d7998adf09d746de171871e26f1b7b724cbe8",
+      "joint_epoch": 6,
+      "roughness_adaptation_epoch": 11
+    },
+    "54": {
+      "source_checkpoint_sha256": "1e047dc3fcc429848b8dd3705761ed319b34a5831d75fc59c99e7a6a735d4c78",
+      "joint_epoch": 5,
+      "roughness_adaptation_epoch": 11
+    },
+    "55": {
+      "source_checkpoint_sha256": "1ca2305f1a63f8863540d6cd155ccf383ce97b5e6c9349fc446c102d1121a24a",
+      "joint_epoch": 4,
+      "roughness_adaptation_epoch": 11
+    }
+  },
+  "weights": "Inference-only copies; all trained tensors preserved exactly"
+}

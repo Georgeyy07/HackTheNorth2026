@@ -15,7 +15,7 @@ import uvicorn
 
 
 HERE = Path(__file__).resolve().parent
-EXPORT = HERE.parent / "reports/test_drive_inference_20260919"
+EXPORT = HERE.parent / "artifacts/test_drive_inference"
 FILTERS = HERE.parent / "reports/alert_filter_20260919"
 SIGNALS = ["time_s", "input_available_s", "accel_x", "accel_y", "accel_z",
            "gyro_x", "gyro_y", "gyro_z", "speed"]
@@ -38,7 +38,14 @@ def create_app(export=None, filters=None):
     manifest = read(export / "manifest.json")
     sessions = {s["session_id"]: s for s in manifest["sessions"]}
     profile_file = filters / "viewer_profiles.json"
-    profiles = read(profile_file)["profiles"] if profile_file.exists() else [dict(id="original", label="Original post-processing", config={})]
+    if manifest.get('score_filter_applied'):
+        # The export already contains filtered updates. Old comparison profiles
+        # belong to another model/export and must not silently replace them.
+        config = manifest['alert_filter']
+        label = 'Kalman + hysteresis' if config.get('kind') == 'kalman' else 'Filtered + hysteresis'
+        profiles = [dict(id='original', label=label, config=config, applied_in_export=True)]
+    else:
+        profiles = read(profile_file)["profiles"] if profile_file.exists() else [dict(id="original", label="Original post-processing", config={})]
     profile_lookup = {p["id"]:p for p in profiles}
     app = FastAPI(docs_url=None, redoc_url=None)
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)

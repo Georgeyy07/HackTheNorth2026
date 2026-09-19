@@ -2,6 +2,8 @@
 
 `RoadDataset(root, source='real'|'synthetic'|'both', split='train'|'val'|'test')` reads a prepared corpus. It never downloads or regenerates data during training. `real_dataset='all'|'kaggle'|'lira'|'roadsens'` optionally filters the real component.
 
+The active model uses `AccelerationSpeedDataset` with the same constructor options. It returns `[time,4]` acceleration XYZ + speed, projecting the canonical stored columns `[0,1,2,6]` before normalization, augmentation, and label-validity reduction. Gyro values and gyro-only observations cannot influence training or inference. `train_stats` is `None`; the current model uses its own instance normalization plus statistics branch. Missing RoadSens speed remains masked.
+
 ## Signals and windows
 
 - `x`: float32 `[time, 7]`, ordered `accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z, speed`.
@@ -40,7 +42,7 @@ Kaggle has disturbance annotations but no measured IRI. LiRA supplies section IR
 
 ## Obtaining artifacts
 
-The simplest handoff is an existing prepared corpus. Preserve its manifest, record folders, and checksums. No dataset or simulator implementation is included in this source-only repository.
+The simplest handoff is an existing prepared corpus. Preserve its manifest, record folders, and checksums. No dataset or simulator implementation is included in this repository; the small four-member inference ensemble is included separately under `models/acceleration_speed/`.
 
 The included conversion tools have explicit prerequisites:
 

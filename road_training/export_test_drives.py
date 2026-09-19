@@ -16,15 +16,16 @@ import numpy as np
 import pandas as pd
 import torch
 
-from road_training.checkpoints import load_teachers
+from road_training.checkpoints import load_teachers, model_channels, channel_names
+from road_training.acceleration_speed import INDICES
 from road_training.timeline_stream import RoadTimelineStream
 
 
 REPO = Path(__file__).resolve().parents[1]
-DATA = REPO / "road_training/data_roadsens_aligned"
-RECEIPT = REPO / "reports/mounting_ensemble_20260919/ensemble.json"
+DATA = REPO / "artifacts/data_roadsens_aligned"
+RECEIPT = REPO / "models/acceleration_speed/ensemble.json"
 SELECTION = REPO / "configs/timeline.json"
-OUTPUT = REPO / "reports/test_drive_inference_20260919"
+OUTPUT = REPO / "artifacts/test_drive_inference"
 CHANNELS = ["accel_x", "accel_y", "accel_z", "gyro_x", "gyro_y", "gyro_z", "speed"]
 GRADES = ["good", "medium", "bad", "terrible"]
 HZ, PATCH = 100, 16
@@ -165,6 +166,16 @@ def infer_drive(model, x, mask, config, on_update=None):
     stream = RoadTimelineStream(model, config)
     x = torch.as_tensor(x, dtype=torch.float32, device=stream.device)
     mask = torch.as_tensor(mask, dtype=torch.bool, device=stream.device)
+    if x.ndim != 2 or mask.shape != x.shape:
+        raise ValueError('Input and mask must be matching two-dimensional arrays')
+    # Prepared files retain their canonical raw sensor columns for provenance.
+    # Remove gyro before windowing, normalization, validity or model inference.
+    if x.ndim == 2 and x.shape[1] == 7 and stream.channels == 4:
+        x, mask = x[:, list(INDICES)], mask[:, list(INDICES)]
+    if x.ndim != 2 or x.shape[1] != stream.channels or mask.shape != x.shape:
+        raise ValueError('Input and mask must match the model or canonical recording schema')
+    if not torch.isfinite(x[mask]).all():
+        raise ValueError('Observed inputs must be finite, including the partial final patch')
     n, rows = len(x), []
     whole = n // PATCH * PATCH
     for start in range(0, whole, PATCH):
@@ -185,7 +196,7 @@ def infer_drive(model, x, mask, config, on_update=None):
                          target_sample_end=(target + 1) * PATCH,
                          emitted_after_samples=whole, valid=provisional["votes"] > 0))
     if n > whole:
-        tail = torch.zeros(1, PATCH, 7, device=stream.device)
+        tail = torch.zeros(1, PATCH, stream.channels, device=stream.device)
         tail_mask = torch.zeros_like(tail, dtype=torch.bool)
         tail[0, :n - whole] = x[whole:]
         tail_mask[0, :n - whole] = mask[whole:]
@@ -199,6 +210,7 @@ def infer_drive(model, x, mask, config, on_update=None):
                    status="provisional_partial", valid=valid, votes=int(valid),
                    probability=float(output["disturbance_logit"][0, -1].float().sigmoid()) if valid else None,
                    iri_raw_m_per_km=float(output["roughness"][0, -1].float()) if valid else None)
+        row = stream.postprocess(row)
         rows.append(row)
         if on_update:
             on_update(dict(row))
@@ -253,6 +265,7 @@ def sample_table(x, mask, source_time, native, patches):
     columns = ["target_patch", "status", "is_final", "valid", "available_s", "available_unix_ms",
                "probability", "disturbance", "iri_m_per_km", "quality_grade", "quality_name", "votes", "context_spread"]
     predictions = pd.DataFrame(patches).set_index("target_patch", drop=False)
+    columns += [name for name in ("original_probability", "score_kind") if name in predictions]
     expanded = predictions.loc[np.arange(n) // PATCH, columns].reset_index(drop=True)
     expanded = expanded.rename(columns={"valid": "prediction_valid", "available_s": "prediction_available_s",
                                         "available_unix_ms": "prediction_available_unix_ms"})
@@ -450,9 +463,11 @@ def main():
                 checkpoints=read(args.ensemble)["checkpoints"], manifest_path=str((args.data / "manifest.json").resolve()),
                 manifest_sha256=sha(args.data / "manifest.json"), selection_path=str(args.selection.resolve()),
                 selection_sha256=sha(args.selection), config=dict(delay=2, **config),
-                postprocessing_policy="Previously selected on validation for the previous ensemble; reused unchanged for the new ensemble. No TEST tuning.",
+                postprocessing_policy="Frozen overlap consensus, then configured score filter on finalized patches only. No TEST tuning.",
+                alert_filter=config.get("alert_filter"),
                 sources_verified={}, source_code_sha256={str(p.relative_to(REPO)): sha(p) for p in
-                    [Path(__file__), REPO / "road_training/timeline.py", REPO / "road_training/timeline_stream.py"]},
+                    [Path(__file__), REPO / "road_training/timeline.py", REPO / "road_training/timeline_stream.py",
+                     REPO / "road_training/alert_filter.py", REPO / "road_training/checkpoints.py"]},
                 datasets=["kaggle", "lira_cd"], sessions=[r["id"] for r in records],
                 samples=sum(r["samples"] for r in records), device=torch.cuda.get_device_name(),
                 precision="CUDA bfloat16 autocast, float32 normalization; batch 1", selection="Every sample of every real Kaggle/LiRA TEST record")
@@ -478,6 +493,9 @@ def main():
                   available_time_policy="Sensor data availability, includes native interpolation wait where needed; excludes compute, transport, map rendering. A sample interval ends at (index+1)/100.",
                   coordinate_system="Measured latitude/longitude degrees; GeoJSON order is longitude, latitude",
                   channels=CHANNELS, units=["m/s^2"] * 3 + ["rad/s"] * 3 + ["m/s"],
+                  model_input_channels=channel_names(model_channels(model)),
+                  alert_filter=config.get("alert_filter"),
+                  score_filter_applied=config.get("alert_filter") is not None,
                   quality_bins_m_per_km=[2, 4, 6], quality_names=GRADES,
                   quality_bin_policy="Existing project display bins; not a validated universal road condition standard",
                   head_semantics=dict(disturbance="Binary localized disturbance, including manholes, depressions, bumps, cracks; not a dedicated pothole classifier", roughness="Estimated overall IRI, m/km"),

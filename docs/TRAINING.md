@@ -4,7 +4,7 @@
 
 Start with `instance_model.py` for the encoder/heads, `train_multitask.py` for target reduction and focal + Huber losses, `instance_loss.py` for per-dataset weighting, and `mounting_augmentation.py` for rotation/noise.
 
-`experiments/instance_study.py` implements dataset-balanced batches, AdamW, clipping, BF16, validation selection, early stopping, epoch metrics, and resumable checkpoints. `experiments/mounting_study.py` applies the updated augmentation recipe. The current full recipe uses batch size 256, learning rate 1e-4, 1,024-sample windows, 16-sample patches, training stride 1, and fixed sample slots for Kaggle/LiRA/RoadSens. `instance_roughness.py` optionally adapts only the IRI head on LiRA after detector selection. `mounting_ensemble_eval.py` compares four frozen members and measures latency.
+`experiments/instance_study.py` implements dataset-balanced batches, AdamW, clipping, BF16, validation selection, early stopping, epoch metrics, and resumable checkpoints. `experiments/mounting_study.py` applies the updated augmentation recipe. New mounting plans default to **four inputs: acceleration XYZ + speed**, with statistics for both heads. `acceleration_speed.py` removes gyro before sampling-support checks, normalization and augmentation. Pass `channels=7` / `--channels 7` only for an explicit legacy experiment. The current full recipe uses batch size 256, learning rate 1e-4, 1,024-sample windows, 16-sample patches, training stride 1, and fixed sample slots for Kaggle/LiRA/RoadSens. `instance_roughness.py` optionally adapts only the IRI head on LiRA after detector selection. `mounting_ensemble_eval.py` compares four frozen members and measures latency.
 
 Research runners freeze their data and source hashes in a plan. Old plans refer to old source locations and cannot be resumed unchanged after this migration. Create fresh plans in new output folders. Many historical runners also expect the earlier experiment artifacts named by their module constants; keeping them under `experiments/` makes this dependence explicit.
 
@@ -21,7 +21,7 @@ base.initialize()  # Declares the parent recipe; does not run its ablation suite
 mounting.initialize(
     'reports/mounting_seed52', data_root=base.DATA, seed=52,
     yaw_degrees=20., tilt_degrees=10., probability=.75,
-    epochs=24, steps_per_epoch=256,
+    epochs=24, steps_per_epoch=256, channels=4,
 )
 ```
 
@@ -69,4 +69,6 @@ Replace `droppatch` with `arctan` for that implementation. Pretraining uses its 
 
 `checkpoints.load_teachers` reconstructs the saved instance model configuration, checks checkpoint hashes, and averages member probabilities/IRI. `RoadTimelineStream` provides rolling prediction updates; `timeline.py` contains overlap fusion, finalization and hysteresis. `live_inference.py` is the alternative causal-model wrapper.
 
-`streaming_evaluation.py` implements patch, event and section metrics. Patch disturbance F1, event F1, and section IRI errors measure different things. The exported quality grades use thresholds at 2/4/6 m/km; they are derived from IRI predictions, not a separate defect-type head. The optional `alert_filter.py`/`tuned_alert_filter.py` and their experiments are additional post-processing studies; their presence does not automatically enable a filter in the default timeline configuration.
+`streaming_evaluation.py` implements patch, event and section metrics. Patch disturbance F1, event F1, and section IRI errors measure different things. The exported quality grades use thresholds at 2/4/6 m/km; they are derived from IRI predictions, not a separate defect-type head. The current `RoadTimelineStream` default and `configs/timeline.json` enable `alert_filter.py`: probability-space Kalman with Q/R=3.2, onset=.70 and offset=.50. It runs once per finalized patch after consensus and resets at drive boundaries or invalid patches. IRI is unchanged. `tuned_alert_filter.py` remains a historical experiment and is not enabled. Explicit legacy timeline configs without `alert_filter` still reproduce unfiltered results.
+
+The included `models/acceleration_speed/ensemble.json` loads four previously trained seeds (52–55), with the LiRA-only roughness-head adaptation already applied. These are exact inference-only copies, not seven-input models with gyro zeroed. The mounting command above trains a fresh joint model; it does not claim to recreate the head adaptation automatically.

@@ -4,6 +4,13 @@
     "roughness_blend": "latest",
     "onset": 0.6,
     "offset": 0.5,
-    "roughness_alpha": 1.0
+    "roughness_alpha": 1.0,
+    "alert_filter": {
+      "kind": "kalman",
+      "space": "probability",
+      "q_over_r": 3.2,
+      "onset": 0.7,
+      "offset": 0.5
+    }
   }
 }

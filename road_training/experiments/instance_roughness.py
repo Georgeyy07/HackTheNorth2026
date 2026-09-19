@@ -47,9 +47,11 @@ def train(seed,winner,plan):
     for name,p in model.named_parameters():p.requires_grad_(name.startswith('roughness_head.'))
     frozen={k:v.clone() for k,v in saved['model_state'].items() if not k.startswith('roughness_head.')}
     optimizer=torch.optim.AdamW(model.roughness_head.parameters(),lr=plan['lr'],weight_decay=plan['weight_decay'])
-    training=RoadDataset(DATA,source='real',real_dataset='lira',split='train',stride=1,return_labels=True)
+    from road_training.acceleration_speed import AccelerationSpeedDataset
+    dataset = AccelerationSpeedDataset if model.encoder.channels == 4 else RoadDataset
+    training=dataset(DATA,source='real',real_dataset='lira',split='train',stride=1,return_labels=True)
     selected,_,_=supervised_windows(training,16)
-    val=RoadDataset(DATA,source='real',split='val',stride=1024,return_labels=True)
+    val=dataset(DATA,source='real',split='val',stride=1024,return_labels=True)
     validation,_,_=supervised_windows(val,16)
     loader_args=dict(batch_size=256,num_workers=2,pin_memory=True)
     val_loader=DataLoader(validation,shuffle=False,generator=torch.Generator().manual_seed(811),**loader_args)

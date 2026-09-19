@@ -10,3 +10,7 @@ __all__ = ["RoadDataset", "PatchTST", "PatchTSTPretrainer", "PatchTSTPredictor",
 from road_training.instance_model import InstancePatchTST, InstanceRoadModel
 
 __all__ += ["InstancePatchTST", "InstanceRoadModel"]
+
+from road_training.acceleration_speed import AccelerationSpeedDataset
+
+__all__ += ["AccelerationSpeedDataset"]

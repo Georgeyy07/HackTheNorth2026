@@ -7,6 +7,11 @@ the assumed scalar model, not measured neural-network uncertainty.
 import math
 
 
+# Earlier fixed filter preferred for deployment; no adaptive tuning or TEST fit.
+DEFAULT_ALERT_FILTER = dict(kind='kalman', space='probability', q_over_r=3.2,
+                            onset=.7, offset=.5)
+
+
 class ScoreFilter:
     def __init__(self, kind="none", space="probability", alpha=.6, q_over_r=.9):
         if kind not in ("none", "ema", "kalman") or space not in ("probability", "logit"):

@@ -6,6 +6,7 @@ only a partial patch and bounded model/history state; they never retain outputs.
 from collections import deque
 import torch
 from road_training.streaming_model import StreamingRoadModel
+from road_training.checkpoints import model_channels
 
 
 class RoadStream:
@@ -13,11 +14,14 @@ class RoadStream:
 
     Returned target_sample_start/end identify the classified interval. The
     emitted_after_samples field records when the required input became available.
-    Device execution time is additional. Raw input is [new_samples, 7] in SI units.
+    Device execution time is additional. Input width follows the checkpoint:
+    four for acceleration/speed, seven for legacy models. This lower-level
+    adapter emits raw scores; use RoadTimelineStream for consensus + Kalman.
     """
     def __init__(self, model, *, delay_patches=2):
         self.model=model.eval()
         self.device=next(model.parameters()).device
+        self.channels=model_channels(model)
         self.causal=isinstance(model,StreamingRoadModel)
         self.delay=model.delay_patches if self.causal else delay_patches
         if not 0<=self.delay<64:
@@ -29,22 +33,22 @@ class RoadStream:
 
     @torch.inference_mode()
     def reset(self):
-        self.pending=torch.zeros(0,7,device=self.device)
-        self.pending_mask=torch.zeros(0,7,device=self.device,dtype=torch.bool)
+        self.pending=torch.zeros(0,self.channels,device=self.device)
+        self.pending_mask=torch.zeros(0,self.channels,device=self.device,dtype=torch.bool)
         self.patches=0
         self.validity=deque(maxlen=self.delay+1)
         if self.causal:
             with self.autocast():self.state=self.model.initial_state()
         else:
-            self.window=torch.zeros(1,1024,7,device=self.device)
+            self.window=torch.zeros(1,1024,self.channels,device=self.device)
             self.window_mask=torch.zeros_like(self.window,dtype=torch.bool)
 
     @torch.inference_mode()
     def push(self,x,mask=None):
         x=torch.as_tensor(x,device=self.device,dtype=torch.float32)
         mask=torch.isfinite(x) if mask is None else torch.as_tensor(mask,device=self.device,dtype=torch.bool)
-        if x.ndim!=2 or x.shape[1]!=7 or mask.shape!=x.shape or not torch.isfinite(x[mask]).all():
-            raise ValueError('Finite observed values and matching [samples,7] masks required')
+        if x.ndim!=2 or x.shape[1]!=self.channels or mask.shape!=x.shape or not torch.isfinite(x[mask]).all():
+            raise ValueError(f'Finite observed values and matching [samples,{self.channels}] masks required')
         x=torch.cat((self.pending,x));mask=torch.cat((self.pending_mask,mask))
         consumed=len(x)//16*16
         self.pending=x[consumed:].clone();self.pending_mask=mask[consumed:].clone()

@@ -88,3 +88,5 @@ Python API tests use small temporary fixtures. Browser integration tests expect
 the original nine-drive export with its known timing/GPS cases. The ZIP download
 is optional: put an archive next to the export folder with the same basename
 (`test_drive_inference.zip`), or that endpoint returns 404.
+
+Exports made with the current `configs/timeline.json` already apply the fixed Kalman filter to final disturbance scores. The viewer labels these **Kalman + hysteresis**, uses their stored updates directly, and ignores old external comparison profiles for that export. Raw gyro plots are optional recorded context; the active four-input model never consumes gyro.

@@ -14,6 +14,8 @@ import traceback
 
 from road_training.experiments import instance_study as study
 from road_training.mounting_augmentation import perturb
+from road_training.acceleration_speed import augment as acceleration_augment
+from road_training.checkpoints import channel_names
 from road_training.common import read, write, sha
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,10 +25,11 @@ ARM = 'mounting_detection_focus'
 
 
 def initialize(out, *, data_root=DEFAULT_DATA, seed=72, yaw_degrees=20., tilt_degrees=10., probability=.75,
-               epochs=24, steps_per_epoch=256):
+               epochs=24, steps_per_epoch=256, channels=4):
     """Freeze the new recipe and its sources without modifying the old plan."""
     # Validate the same options as the augmenter before creating a run folder.
     import torch
+    names = channel_names(channels)
     from road_training.mounting_augmentation import mounting_rotations
     x = torch.zeros(1, 1, 7); x[..., 2] = 9.81
     mounting_rotations(x, torch.ones_like(x, dtype=torch.bool), seed=seed, step=0,
@@ -48,13 +51,15 @@ def initialize(out, *, data_root=DEFAULT_DATA, seed=72, yaw_degrees=20., tilt_de
         epochs=epochs, steps_per_epoch=steps_per_epoch, mounting_augmentation=augmentation,
         data_root=str(data_root), manifest_sha256=sha(data_root/'manifest.json'),
         parent_plan_sha256=sha(parent),
-        augmentation='TRAIN only: fixed-per-window gravity-axis yaw and horizontal tilt, shared accel/gyro; existing noise/bias',
+        channels=channels, input_channels=names,
+        augmentation='TRAIN only: fixed-per-window gravity-axis yaw and horizontal tilt; existing noise/bias; observed input channels only',
         final_selection='Single development run, clean VAL checkpoint selection; no TEST access or checkpoint promotion')
     for key in ('screen_seed', 'confirmation_seeds', 'finalists'):
         plan.pop(key, None)
     # The inherited update-based stopping rule continues to work for short smoke runs.
     plan['early_stopping']['minimum_updates'] = min(1536, epochs * steps_per_epoch)
     new_files = ['road_training/mounting_augmentation.py', 'road_training/experiments/mounting_study.py',
+                 'road_training/acceleration_speed.py', 'road_training/checkpoints.py',
                  'road_training/tools/align_roadsens.py',
                  'road_training/tests/test_mounting_augmentation.py', 'road_training/tests/test_roadsens_alignment.py']
     plan['source_sha256'].update({str(ROOT/p): sha(ROOT/p) for p in new_files})
@@ -79,7 +84,8 @@ def configured_study(out):
         study.OUT = out
         study.DATA = Path(read(out/'plan.json')['data_root'])
         plan = study.check_plan()
-        study.perturb = partial(perturb, **plan['mounting_augmentation'])
+        augmenter = acceleration_augment if plan.get('channels', 7) == 4 else perturb
+        study.perturb = partial(augmenter, **plan['mounting_augmentation'])
         yield plan
     finally:
         study.OUT, study.DATA, study.perturb = previous_out, previous_data, previous_perturb
@@ -113,10 +119,12 @@ if __name__ == '__main__':
     parser.add_argument('--probability', type=float, default=.75)
     parser.add_argument('--epochs', type=int, default=24)
     parser.add_argument('--steps-per-epoch', type=int, default=256)
+    parser.add_argument('--channels', type=int, choices=(4, 7), default=4,
+                        help='Four: acceleration XYZ + speed; seven: legacy gyro model')
     args = parser.parse_args()
     if args.init:
         initialize(args.out, data_root=args.data_root, seed=args.seed, yaw_degrees=args.yaw_degrees,
             tilt_degrees=args.tilt_degrees, probability=args.probability,
-            epochs=args.epochs, steps_per_epoch=args.steps_per_epoch)
+            epochs=args.epochs, steps_per_epoch=args.steps_per_epoch, channels=args.channels)
     else:
         run(args.out)

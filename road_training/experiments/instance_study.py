@@ -17,6 +17,8 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from road_training.dataset import RoadDataset
+from road_training.acceleration_speed import AccelerationSpeedDataset
+from road_training.checkpoints import channel_names
 from road_training.instance_model import InstancePatchTST, InstanceRoadModel
 from road_training.instance_loss import dataset_joint_loss
 from road_training.augmentation import perturb
@@ -86,6 +88,11 @@ def make_model(config):
     return InstanceRoadModel(InstancePatchTST(**config['encoder_config']),**config['model_config'])
 
 
+def dataset_class(channels):
+    channel_names(channels)  # Reject unsupported contracts before reading data.
+    return AccelerationSpeedDataset if channels == 4 else RoadDataset
+
+
 def train_epoch(model,loader,optimizer,alphas,pooled,setting,seed,epoch,plan,progress):
     model.train(); sums=dict(total=0.,roughness=0.,disturbance=0.); nr=nd=0
     for step,batch in enumerate(loader):
@@ -112,28 +119,30 @@ def train_epoch(model,loader,optimizer,alphas,pooled,setting,seed,epoch,plan,pro
 
 def train(arm,seed):
     plan=check_plan(); setting=plan['arms'][arm]; folder=OUT/f'{arm}_seed{seed}'
+    channels=plan.get('channels', 7)
+    dataset=dataset_class(channels)
     if (folder/'complete.json').exists():
         assert sha(folder/'best.pt')==read(folder/'complete.json')['checkpoint_sha256'];return
     folder.mkdir(exist_ok=True)
     assert torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     torch.set_num_threads(4);random.seed(seed);np.random.seed(seed);torch.manual_seed(seed)
-    data=RoadDataset(DATA,source='real',split='train',stride=1,return_labels=True,max_cached_recordings=128)
+    data=dataset(DATA,source='real',split='train',stride=1,return_labels=True,max_cached_recordings=128)
     selected,counts,_=supervised_windows(data,16); pools=dataset_pools(data,selected.indices)
     assert all(len(p) for p in pools.values())
     per_dataset={}
     for name in ('kaggle','roadsens'):
-        sub=RoadDataset(DATA,source='real',real_dataset=name,split='train',stride=1024,return_labels=True)
+        sub=dataset(DATA,source='real',real_dataset=name,split='train',stride=1024,return_labels=True)
         _,c,_=supervised_windows(sub,16);per_dataset[name]=c
     alphas={k:balanced_alpha(v).cuda() for k,v in per_dataset.items()};pooled=balanced_alpha(counts).cuda()
-    encoder=InstancePatchTST(max_patches=64,instance_eps=plan['instance_eps'])
+    encoder=InstancePatchTST(channels=channels,max_patches=64,instance_eps=plan['instance_eps'])
     model=InstanceRoadModel(encoder,statistics_mode=setting['statistics_mode']).cuda()
     optimizer=torch.optim.AdamW(model.parameters(),lr=plan['lr'],weight_decay=plan['weight_decay'])
-    config=dict(model='InstanceRoadModel',arm=arm,seed=seed,source='real',data_root=str(DATA),
+    config=dict(model='InstanceRoadModel',arm=arm,seed=seed,source='real',data_root=str(DATA),input_channels=channel_names(channels),
         manifest_sha256=plan['manifest_sha256'],plan_sha256=sha(OUT/'plan.json'),setting=setting,
         encoder_config=encoder.config,model_config=dict(statistics_mode=setting['statistics_mode']),
         train_statistics=None,normalization=plan['normalization'],
         parameters=sum(p.numel() for p in model.parameters()),arguments=dict(window_size=1024,lr=plan['lr'],batch_size=256,precision='bf16'),
-        loss=dict(gamma=2.,alpha=alphas['kaggle'].tolist(),roughness_weight=1.,disturbance_weight=1.),
+        loss=dict(gamma=2.,alpha=alphas['kaggle'].tolist(),roughness_weight=setting.get('roughness_weight',1.),disturbance_weight=1.),
         training_alphas={k:v.tolist() for k,v in alphas.items()},pooled_alpha=pooled.tolist(),train_patch_counts=per_dataset,
         windows_by_dataset={k:len(v) for k,v in pools.items()},samples_per_batch=plan['samples_per_batch'],
         train_recordings=[r['id'] for r in data.records])
@@ -145,7 +154,7 @@ def train(arm,seed):
         model.load_state_dict(saved['model_state']);optimizer.load_state_dict(saved['optimizer_state'])
         history,best,significant,stale=(saved[k] for k in ('history','best_score','significant','stale'))
         torch.set_rng_state(saved['torch_rng']);torch.cuda.set_rng_state(saved['cuda_rng'])
-    val=RoadDataset(DATA,source='real',split='val',stride=1024,return_labels=True)
+    val=dataset(DATA,source='real',split='val',stride=1024,return_labels=True)
     validation,_,_=supervised_windows(val,16)
     kwargs=dict(batch_size=256,num_workers=2,pin_memory=True)
     val_loader=DataLoader(validation,shuffle=False,generator=torch.Generator().manual_seed(817),**kwargs)
@@ -188,14 +197,15 @@ def evaluate_checkpoint(folder,split):
     from road_training.metrics import evaluate as detailed
     saved=torch.load(folder/'best.pt',map_location='cpu',weights_only=False);c=saved['config']
     model=make_model(c).cuda();model.load_state_dict(saved['model_state'])
-    data=RoadDataset(DATA,source='real',split=split,stride=1024,return_labels=True)
+    dataset=dataset_class(model.encoder.channels)
+    data=dataset(DATA,source='real',split=split,stride=1024,return_labels=True)
     selected,_,_=supervised_windows(data,16)
     loader=DataLoader(selected,batch_size=256,num_workers=2,pin_memory=True,shuffle=False)
     metrics=run_epoch(model,loader,'cuda',precision='bf16',gamma=2.,alpha=torch.tensor(c['loss']['alpha'],device='cuda'))
     write(folder/f'{split}_patches.json',dict(metrics=metrics,epoch=saved['epoch'],split=split,
         checkpoint_sha256=sha(folder/'best.pt'),normalization=c['normalization'],threshold=.5,windows=len(selected)))
     del model,loader;gc.collect();torch.cuda.empty_cache()
-    detailed(folder/'best.pt',folder/f'{split}_details.json',split=split,encoder_class=InstancePatchTST,
+    detailed(folder/'best.pt',folder/f'{split}_details.json',split=split,encoder_class=InstancePatchTST,dataset_class=dataset,
              model_class=partial(InstanceRoadModel,**c['model_config']))
 
 

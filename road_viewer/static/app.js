@@ -87,8 +87,9 @@ async function loadSession(id, initialTime = 0, autoplay = true, profile = $('pr
     engine = new Replay(data); position = 0; loading = false;
     $('session').value = id;
     $('profile').value = profile;
-    $('profile-note').textContent = profile === 'original' ? 'Consensus + hysteresis' : profile === 'threshold' ? 'Higher precision · lower recall' : 'Experimental · fewer alerts, more misses';
-    $('model-line-note').textContent = profile === 'kalman' ? 'Solid: filtered · dashed: raw provisional' : 'Solid: final · dashed: provisional';
+    const kalman = data.profile.config?.kind === 'kalman' || profile === 'kalman';
+    $('profile-note').textContent = data.profile.applied_in_export ? data.profile.label : profile === 'original' ? 'Consensus + hysteresis' : profile === 'threshold' ? 'Higher precision · lower recall' : 'Experimental · fewer alerts, more misses';
+    $('model-line-note').textContent = kalman ? 'Solid: filtered · dashed: raw provisional' : 'Solid: final · dashed: provisional';
     document.querySelector('.download').textContent = 'Original data ↓';
     document.querySelector('.download').title = 'Download the original full export; alert comparison modes do not change it';
     $('session-meta').textContent = `${data.session.samples.toLocaleString()} samples · ${clock(data.session.duration_s)} drive · 100 Hz inputs`;

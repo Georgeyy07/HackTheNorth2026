@@ -23,6 +23,7 @@ def test_arbitrary_chunks_delay_missing_target_and_reset():
 
 def test_rolling_adapter_target_and_bounded_input():
     class Toy(torch.nn.Module):
+        channels = 7
         def __init__(self):super().__init__();self.anchor=torch.nn.Parameter(torch.zeros(()))
         def forward(self,x,mask):
             return dict(roughness=x[:,::16,0],disturbance_logit=x[:,::16,0],patch_valid=mask[:,::16].any(-1))
