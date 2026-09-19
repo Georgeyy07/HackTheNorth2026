@@ -1,0 +1,5 @@
+# Versions used by the existing project environment for this viewer.
+fastapi==0.110.0
+uvicorn==0.27.0
+pandas==2.1.4
+pyarrow==22.0.0

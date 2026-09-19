@@ -1,0 +1,4 @@
+# Optional one-time LiRA import; runtime Dataset still needs only NumPy/PyTorch.
+h5py>=3.10
+pandas>=2.1
+scipy>=1.11

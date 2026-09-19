@@ -1,0 +1,9 @@
+{
+  "config": {
+    "defect_blend": "recent",
+    "roughness_blend": "latest",
+    "onset": 0.6,
+    "offset": 0.5,
+    "roughness_alpha": 1.0
+  }
+}
