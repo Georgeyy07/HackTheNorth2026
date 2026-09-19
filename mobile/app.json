@@ -24,10 +24,12 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "RoughRoute uses your location to track progress along a route and announce upcoming turns."
+          "locationWhenInUsePermission": "RoughRoute uses your location for navigation and to record GPS speed alongside road motion."
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      ["expo-sensors", { "motionPermission": "RoughRoute records accelerometer and gyroscope data to measure road motion." }],
+      "expo-sharing"
     ]
   }
 }

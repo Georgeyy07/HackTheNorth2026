@@ -13,6 +13,12 @@
 
 Each dataset item also contains time, recording ID, source, dataset name, and start index. With `return_labels=True`, per-sample label dictionaries are included; `train_multitask.patch_targets` creates the two patch-level targets and their validity masks.
 
+## Mobile live-input contract
+
+The mobile recorder emits `[accel_x, accel_y, accel_z, speed]` (four channels), with a matching validity mask. Acceleration includes gravity in m/s²; speed is m/s. Vehicle X points forward, Y left, Z up; these directions move with the car, not geographic north/east. For an upright Android phone with top up and screen facing the occupants, use `[-phone_z, -phone_x, phone_y]`; level stationary acceleration is approximately `[0, 0, +9.81]`. Tilted/sideways mounts require a proper rotation applied consistently to all three axes. Instance normalization does not correct orientation. Mount augmentation covers only modest offsets (approximately ±20° yaw and ±10° tilt). Some source horizontal alignment, including MIT/UMass, remains unverified.
+
+The recorder saves raw accel/gyro/GPS and VQF-stabilized accel/gyro/speed separately from vehicle-frame model inputs. VQF earth-frame XY have arbitrary heading and must not be used as vehicle XY. See [mobile recording and export](../mobile/README.md). The prepared training archive below retains its seven-channel schema; do not silently pass a four-channel mobile row to a seven-channel adapter.
+
 ## Prepared files
 
 ```text
