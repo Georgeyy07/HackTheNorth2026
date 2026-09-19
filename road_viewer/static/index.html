@@ -10,20 +10,34 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/" aria-label="Roadscope home"><span class="brand-icon"><svg viewBox="0 0 24 24"><path d="M7 3 3 21m14-18 4 18M12 3v4m0 3v4m0 3v4"/></svg></span>roadscope<span class="brand-divider"></span><span class="brand-section">Replay lab</span></a>
-    <div class="top-actions"><span class="recorded-pill"><i></i> RECORDED TEST DATA</span><button id="about" class="text-button">About this replay <span aria-hidden="true">↗</span></button><a class="download" href="/export" title="Download the full inference dataset">Export data <span aria-hidden="true">↓</span></a></div>
+    <div class="top-actions"><span class="recorded-pill"><i></i> RECORDED DRIVE</span><button id="about" class="text-button">About this replay <span aria-hidden="true">↗</span></button><a class="download" href="/export" title="Download the full inference dataset">Export data <span aria-hidden="true">↓</span></a></div>
   </header>
   <main>
     <section class="page-heading">
       <div><div class="eyebrow">FROM SENSOR TO STREET</div><h1>Drive replay<span class="title-dot">.</span></h1><p>Watch road conditions take shape, one observation at a time.</p></div>
-      <div class="heading-controls"><div class="drive-picker"><label for="session">TEST RECORDING</label><select id="session" disabled><option>Loading recordings…</option></select><span id="session-meta">9 drives · Kaggle + LiRA</span></div><div class="drive-picker profile-picker"><label for="profile">DISTURBANCE POST-PROCESSING</label><select id="profile" disabled><option value="original">Original post-processing</option></select><span id="profile-note">Consensus + hysteresis</span></div></div>
+      <div class="heading-controls"><div class="drive-picker"><label for="session">RECORDING</label><select id="session" disabled><option>Loading recordings…</option></select><span id="session-meta">Select a drive or upload your own</span></div><div class="drive-picker profile-picker"><label for="profile">DISTURBANCE POST-PROCESSING</label><select id="profile" disabled><option value="original">Original post-processing</option></select><span id="profile-note">Consensus + hysteresis</span></div></div>
     </section>
 
+    <section id="upload-panel" class="upload-panel" hidden aria-label="Import your drive">
+      <form id="upload-form">
+        <div><strong>Replay your own drive</strong><p>CSV: timestamp, accelerometer XYZ; optional speed and GPS. XYZ must be forward, left, up, with gravity included.</p></div>
+        <div class="upload-fields">
+          <label>Recording<input id="upload-file" type="file" accept=".csv,text/csv" required></label>
+          <label>Timestamp<select id="time-unit"><option value="s">Seconds</option><option value="ms">Milliseconds</option><option value="iso">ISO date/time</option></select></label>
+          <label>Acceleration<select id="acceleration-unit"><option value="m/s2">m/s²</option><option value="g">g</option></select></label>
+          <label>Speed<select id="speed-unit"><option value="m/s">m/s</option><option value="km/h">km/h</option></select></label>
+          <button id="upload-submit" type="submit">Run inference</button>
+        </div>
+        <details><summary>Column names</summary><p>Default headers: time_s, accel_x, accel_y, accel_z, speed, latitude_deg, longitude_deg. Common aliases timestamp, ax/ay/az and lat/lon also work. GPS cells should be empty between new fixes.</p><label>Optional JSON mapping<input id="column-mapping" type="text" placeholder='{"time_s":"timestamp_ms","accel_x":"acceleration_x"}'></label></details>
+        <p id="upload-status" role="status">Up to 64 MiB / 60 minutes. Inference runs on this server; then replay starts.</p>
+      </form>
+    </section>
     <section class="workspace" aria-label="Map and current predictions">
       <div class="map-panel">
         <div id="map" aria-label="Map of the driven route and predicted road conditions"></div>
         <div class="map-topline"><span class="map-status" id="map-status"><i></i> LOADING DRIVE</span><span class="map-place" id="place">Larisa, Greece</span></div>
         <div class="map-tools"><button id="follow" class="tool active" title="Follow the car" aria-label="Follow the car" aria-pressed="true">◎</button><button id="fit" class="tool" title="Fit traveled route" aria-label="Fit traveled route">⤢</button></div>
-        <div class="map-legend"><span class="legend-title">ESTIMATED ROUGHNESS</span><span><i style="--color:#159c78"></i>Good</span><span><i style="--color:#d2ae36"></i>Medium</span><span><i style="--color:#e78043"></i>Bad</span><span><i style="--color:#c95268"></i>Terrible</span><span class="legend-event"><i></i>Disturbance</span></div>
+        <div class="map-legend"><span class="legend-title">ESTIMATED ROUGHNESS</span><span><i style="--color:#159c78"></i>Good</span><span><i style="--color:#d2ae36"></i>Medium</span><span><i style="--color:#e78043"></i>Bad</span><span id="terrible-legend"><i style="--color:#c95268"></i>Terrible</span><span class="legend-event"><i></i>Disturbance</span></div>
         <div class="map-caption" id="map-caption">Road colors appear after the prediction is finalized.</div>
         <div id="tile-warning" class="tile-warning" hidden>Street tiles unavailable. GPS and inference overlays remain active.</div>
         <div class="loading-cover" id="loading" role="status"><span class="spinner"></span><strong>Preparing your drive</strong><span>Loading sensor readings and timed predictions…</span></div>
@@ -33,8 +47,8 @@
       <aside class="telemetry">
         <div class="telemetry-title"><span>LIVE READOUT</span><span id="final-status" class="small-pill">Waiting for context</span></div>
         <section class="roughness-card">
-          <div class="card-label">Overall road quality <span title="Predicted International Roughness Index, metres per kilometre">ⓘ</span></div>
-          <div class="quality-value"><strong id="iri">—</strong><span>m/km<span class="unit-caption">estimated IRI</span></span><span id="quality-badge" class="quality-badge">Waiting</span></div>
+          <div class="card-label">Overall road quality <span id="quality-info" title="Predicted International Roughness Index, metres per kilometre">ⓘ</span></div>
+          <div class="quality-value"><strong id="iri">—</strong><span id="quality-unit">m/km<span class="unit-caption">estimated IRI</span></span><span id="quality-badge" class="quality-badge">Waiting</span></div>
           <div class="quality-scale"><span></span><span></span><span></span><span></span><i id="quality-pointer"></i></div>
           <div class="scale-labels"><span>Smoother</span><span>Rougher</span></div>
           <div class="prediction-footnote" id="quality-note">Waiting for the first finalized estimate</div>
@@ -54,7 +68,7 @@
     <section class="signals" aria-label="Live sensor and model time series">
       <div class="chart-card"><div class="chart-heading"><h2>Accelerometer <span>m/s²</span></h2><div class="axis-legend"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div></div><canvas id="acc-chart" aria-label="Accelerometer readings in the last 12 seconds"></canvas><div class="chart-footer"><span>Includes gravity</span><span>100 Hz · last 12 s</span></div></div>
       <div class="chart-card"><div class="chart-heading"><h2>Gyroscope <span>rad/s</span></h2><div class="axis-legend"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div></div><div class="chart-body"><canvas id="gyro-chart" aria-label="Gyroscope readings in the last 12 seconds"></canvas><div id="gyro-missing" class="missing-chart" hidden>Gyroscope not recorded<span>This LiRA drive contains acceleration and speed.</span></div></div><div class="chart-footer"><span id="gyro-footer">Recorded sensor axes</span><span>100 Hz · last 12 s</span></div></div>
-      <div class="chart-card"><div class="chart-heading"><h2>Model timeline</h2><div class="axis-legend"><span class="axis-x">IRI</span><span class="axis-alert">Defect %</span></div></div><canvas id="model-chart" aria-label="Available roughness and disturbance predictions in the last 12 seconds"></canvas><div class="chart-footer"><span id="model-line-note">Solid: final · dashed: provisional</span><span>160 ms patches</span></div></div>
+      <div class="chart-card"><div class="chart-heading"><h2>Model timeline</h2><div class="axis-legend"><span id="quality-line-label" class="axis-x">IRI</span><span class="axis-alert">Defect %</span></div></div><canvas id="model-chart" aria-label="Available roughness and disturbance predictions in the last 12 seconds"></canvas><div class="chart-footer"><span id="model-line-note">Solid: final · dashed: provisional</span><span>160 ms patches</span></div></div>
     </section>
 
     <section class="player" aria-label="Playback controls">
@@ -65,7 +79,7 @@
     <footer class="page-footer"><span><i></i> Four-model ensemble · 10.24 s context · 320 ms finalization delay</span><span>Recorded predictions, replayed by availability time. <button id="method-button">How it works ↗</button></span></footer>
   </main>
 
-  <dialog id="about-dialog"><button id="close-about" class="dialog-close" aria-label="Close information">×</button><div class="eyebrow">ABOUT THIS REPLAY</div><h2>A drive, seen through the model.</h2><p>This is a real-time replay of recorded test data and precomputed predictions from the trained four-model ensemble. No new neural-network inference runs in your browser.</p><h3>What appears when?</h3><p>The car follows already observed GPS fixes. Predictions appear only after their exported availability timestamps. Final decisions combine overlapping contexts and arrive 320 ms after the target patch ends, plus any sensor interpolation wait. Hardware and network latency are not added.</p><h3>Reading the map</h3><p>Road colors show final estimated IRI using the project's bins: good below 2, medium 2–4, bad 4–6, and terrible from 6 m/km. Hollow dots are provisional. Coral markers show finalized disturbance onsets. GPS gaps over three seconds hide the current car; no future fixes fill gaps.</p><h3>What the labels can tell us</h3><p>The disturbance head detects a combined category of manholes, cracks, bumps and depressions. It is not a dedicated pothole classifier. Kaggle has disturbance labels but no measured IRI. LiRA has section IRI but no disturbance labels, and no gyroscope. The last two patches and any incomplete tail stay provisional.</p><p class="dialog-tip">Space: play/pause · ← / →: move 5 seconds · Use the timeline to explore any point in a drive.</p></dialog>
+  <dialog id="about-dialog"><button id="close-about" class="dialog-close" aria-label="Close information">×</button><div class="eyebrow">ABOUT THIS REPLAY</div><h2>A drive, seen through the model.</h2><p>This is a real-time replay of recorded drives. Uploaded CSV files run through the four-model ensemble on the server before replay starts. No neural-network inference runs in your browser.</p><h3>What appears when?</h3><p>The car follows already observed GPS fixes. Predictions appear only after their exported availability timestamps. Final decisions combine overlapping contexts and arrive 320 ms after the target patch ends, plus any recorded sensor-availability wait. Uploaded CSV inputs use past-only sample holds. Hardware and network latency are not added.</p><h3>Reading the map</h3><p>Uploaded recordings use ordinal good / medium / bad probabilities, not estimated numeric IRI. Existing regression replays use IRI bins: good below 2, medium 2–4, bad 4–6, and terrible from 6 m/km. Hollow dots are provisional. Coral markers show finalized disturbance onsets. GPS gaps over three seconds hide the current car; no future fixes fill gaps.</p><h3>What the labels can tell us</h3><p>The disturbance head detects a combined category of manholes, cracks, bumps and depressions. It is not a dedicated pothole classifier. Kaggle has disturbance labels but no measured IRI. LiRA has section IRI but no disturbance labels, and no gyroscope. The last two complete patches stay provisional. Uploaded recordings retain an incomplete tail as sensor data without a prediction.</p><p class="dialog-tip">Space: play/pause · ← / →: move 5 seconds · Use the timeline to explore any point in a drive.</p></dialog>
   <script src="/vendor/leaflet/leaflet.js"></script><script type="module" src="/static/app.js"></script>
 </body>
 </html>

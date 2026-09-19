@@ -1,5 +1,12 @@
 # Roadscope: test-drive replay
 
+For your own recordings, see **[CSV inference and upload](../docs/CSV_INFERENCE.md)**.
+Run `python -m road_viewer.server --uploads artifacts/user_drives --port 8766`
+to enable uploads, even without an existing demo export. Uploaded drives use
+the shipped ordinal ensemble and display good / medium / bad quality with
+Kalman-filtered disturbance alerts. The instructions below describe the original
+regression replay.
+
 Open **http://localhost:8765** while the server is running. This is a browser
 replay of recorded sensor data and the frozen ensemble's timed predictions.
 It does not retrain or run neural-network inference in the browser.
@@ -53,8 +60,8 @@ the directory supplied with `--export`.
 
 Files:
 
-- `server.py`: read-only FastAPI endpoints for the catalog, recording payloads,
-  static assets, and the existing downloadable inference ZIP.
+- `server.py`: FastAPI catalog, replay payloads, static assets, exports, and
+  optional background CSV inference endpoints enabled with `--uploads`.
 - `static/replay.js`: pure clock-driven prediction/event state and sensor/GPS
   lookup, independently tested without a browser.
 - `static/app.js`: playback controls, map layers, and Canvas time-series plots.

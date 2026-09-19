@@ -37,8 +37,10 @@ boundary through 170/63.36 inclusive for medium, and above the upper boundary
 for bad (approximately 1.4994 and 2.6831 m/km). **The ordinal head does not
 output calibrated numeric IRI.** It must not be passed to the existing
 IRI-based `RoadTimelineStream`/replay exporter as an IRI regression model.
-This package supplies window inference; the existing regression replay and
-its fixed Kalman filter remain available through their existing interface.
+This package supplies window inference. For rolling inference, the fixed Kalman
+filter, and the web replay, use the dedicated ordinal path described in
+[CSV inference](../../docs/CSV_INFERENCE.md). The original regression replay
+remains available through its existing interface.
 
 ## Load and infer
 

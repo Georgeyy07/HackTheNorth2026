@@ -4,3 +4,16 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 
 .heading-controls{display:flex;gap:15px}.profile-picker,.profile-picker select{min-width:245px;max-width:270px}.profile-picker>span{max-width:270px;font-size:9px}.profile-picker select{font-size:11px}@media(max-width:1200px){.heading-controls{display:grid;grid-template-columns:1fr;gap:9px}.profile-picker,.profile-picker select{max-width:none;min-width:0;width:100%}.page-heading{align-items:center}}@media(max-width:560px){.heading-controls{gap:0}.profile-picker{margin-top:12px!important}}
+
+.upload-panel { margin: 0 0 20px; padding: 20px 24px; background: #fff; border: 1px solid #dce5d9; border-radius: 16px; }
+.upload-panel p { color: #667561; font-size: 12px; line-height: 1.6; margin: 6px 0 12px; }
+.upload-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.upload-panel label { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: #52654d; }
+.upload-panel select, .upload-panel input { padding: 9px; border: 1px solid #dce5d9; border-radius: 7px; background: #fafcf8; }
+.upload-panel button { padding: 11px 18px; border: 0; border-radius: 8px; background: #245442; color: white; cursor: pointer; }
+.upload-panel button:disabled { opacity: .5; cursor: wait; }
+.upload-panel details { margin-top: 14px; font-size: 12px; }
+.upload-panel details input { width: min(100%, 640px); }
+.ordinal-quality .quality-value strong { font-size: 28px; }
+.ordinal-quality .quality-scale span { flex: 1; }
+.ordinal-quality .quality-scale span:nth-child(4) { display: none; }

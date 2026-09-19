@@ -2,7 +2,9 @@
 
 PyTorch models for **road roughness (IRI)** and **localized disturbances**, plus a browser replay of timestamped predictions on a map. This repository contains the training/inference code and visualizer from the road-sensor research workspace.
 
-The current deployed model is a four-member, instance-normalized, bidirectional PatchTST ensemble. It consumes four 100 Hz inputs: **acceleration X/Y/Z and speed, with no gyroscope**, and produces two outputs per 160 ms patch: IRI and disturbance probability. The rolling inference wrapper combines overlapping predictions and finalizes them after two subsequent patches (320 ms of observation delay, plus processing/input availability). Finalized disturbance scores then pass through the earlier fixed Kalman filter (Q/R = 3.2) and hysteresis (onset 0.70, offset 0.50). Normalization remains per-window instance normalization **with statistics supplied to both heads**.
+The model is a four-member, instance-normalized, bidirectional PatchTST ensemble. It consumes four 100 Hz inputs: **acceleration X/Y/Z and speed, with no gyroscope**. The current CSV inference uses the ordinal ensemble: **good / medium / bad quality plus disturbance probability** per 160 ms patch. The original IRI regression ensemble and its replay exports remain available. Rolling inference combines overlapping predictions and finalizes them after two subsequent patches (320 ms of observation delay, plus processing/input availability). Finalized disturbance scores pass through the fixed Kalman filter (Q/R = 3.2) and hysteresis (onset 0.70, offset 0.50). Normalization remains per-window instance normalization **with statistics supplied to both heads**.
+
+**[Upload your own CSV and replay its predictions](docs/CSV_INFERENCE.md):** run `python -m road_viewer.server --uploads artifacts/user_drives --port 8766`, then open http://localhost:8766. Timestamped accelerometer XYZ is required; speed and GPS are optional.
 
 ## Layout
 

@@ -27,10 +27,81 @@ const car = L.marker([0, 0], {zIndexOffset: 1000, interactive: false, icon: L.di
 map.on('dragstart', () => setFollow(false));
 
 function label(session) {
+  if (session.dataset === 'user_csv') return session.display_name || session.session_id;
   if (session.dataset === 'kaggle') return 'Kaggle · Larisa, Greece';
   const match = session.session_id.match(/gm_(\d+)_pass_(\d+)/);
   return `LiRA · M13 · Car ${match?.[1]} / Pass ${match?.[2]}`;
 }
+
+function qualityText(row) {
+  if (!row.valid || row.quality_grade == null) return 'Unknown road quality';
+  const name = NAMES[row.quality_grade];
+  return row.quality_probability
+    ? `${name} · ${(row.quality_probability[row.quality_grade]*100).toFixed(0)}% class probability`
+    : `${name} · ${row.iri_m_per_km.toFixed(2)} m/km`;
+}
+
+async function refreshCatalog() {
+  const response = await fetch('/api/catalog');
+  if (!response.ok) throw new Error(`Catalog request failed: HTTP ${response.status}`);
+  catalog = await response.json();
+  $('upload-panel').hidden = !catalog.uploads_enabled;
+  $('session').replaceChildren();
+  for (const dataset of ['user_csv', 'kaggle', 'lira_cd']) {
+    const group = document.createElement('optgroup');
+    group.label = dataset === 'user_csv' ? 'Your drives' : dataset === 'kaggle' ? 'Kaggle Road Quality' : 'LiRA-CD · M13 test road';
+    for (const session of catalog.sessions.filter(s => s.dataset === dataset)) {
+      const option = document.createElement('option'); option.value = session.session_id;
+      option.textContent = label(session); group.append(option);
+    }
+    if (group.children.length) $('session').append(group);
+  }
+  $('session').disabled = !catalog.sessions.length;
+  $('profile').replaceChildren();
+  for (const profile of catalog.profiles) {
+    const option = document.createElement('option'); option.value = profile.id; option.textContent = profile.label;
+    $('profile').append(option);
+  }
+  $('profile').disabled = !catalog.sessions.length;
+}
+
+$('upload-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const file = $('upload-file').files[0];
+  if (!file) return;
+  setPlaying(false); $('upload-submit').disabled = true;
+  const status = $('upload-status');
+  try {
+    if (file.size > 64*1024*1024) throw new Error('CSV must be at most 64 MiB.');
+    const columns = $('column-mapping').value.trim() || '{}';
+    JSON.parse(columns);
+    status.textContent = 'Uploading recording…';
+    const query = new URLSearchParams({filename: file.name, time_unit: $('time-unit').value,
+      acceleration_unit: $('acceleration-unit').value, speed_unit: $('speed-unit').value, columns});
+    const response = await fetch(`/api/import?${query}`, {method: 'POST', body: file,
+      headers: {'Content-Type': 'text/csv'}});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Upload failed');
+    for (;;) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const poll = await fetch(`/api/import/${encodeURIComponent(result.job_id)}`);
+      if (!poll.ok) throw new Error('Could not read inference progress');
+      const job = await poll.json();
+      if (job.status === 'failed') throw new Error(job.error);
+      status.textContent = `Running ensemble inference… ${(job.progress*100).toFixed(0)}%`;
+      if (job.status === 'complete') {
+        await refreshCatalog();
+        status.textContent = 'Inference ready. Replaying your recording.';
+        await loadSession(job.session_id, 0, true, 'original');
+        break;
+      }
+    }
+  } catch (error) {
+    status.textContent = `Could not process recording: ${error.message}`;
+  } finally {
+    $('upload-submit').disabled = false;
+  }
+});
 
 function setFollow(value) {
   follow = value;
@@ -58,6 +129,7 @@ function clearMap() {
 }
 
 async function loadSession(id, initialTime = 0, autoplay = true, profile = $('profile').value || 'original') {
+  if (catalog?.sessions.find(s => s.session_id === id)?.dataset === 'user_csv') profile = 'original';
   const request = ++requestNumber;
   controller?.abort(); controller = new AbortController();
   setPlaying(false); loading = true;
@@ -85,23 +157,36 @@ async function loadSession(id, initialTime = 0, autoplay = true, profile = $('pr
     const data = await response.json();
     if (request !== requestNumber) return;
     engine = new Replay(data); position = 0; loading = false;
+    const ordinal = data.session.quality_mode === 'ordinal';
+    document.body.classList.toggle('ordinal-quality', ordinal);
+    $('terrible-legend').hidden = ordinal;
+    $('quality-unit').innerHTML = ordinal ? 'predicted<span class="unit-caption">road class</span>' : 'm/km<span class="unit-caption">estimated IRI</span>';
+    $('quality-info').title = ordinal ? 'Good / medium / bad ordinal prediction; not a numeric IRI estimate' : 'Predicted International Roughness Index, metres per kilometre';
+    $('quality-line-label').textContent = ordinal ? 'Quality 0–2' : 'IRI';
     $('session').value = id;
     $('profile').value = profile;
+    const profileOption = [...$('profile').options].find(o => o.value === profile);
+    if (profileOption) profileOption.textContent = data.profile.label;
+    $('profile').disabled = data.session.dataset === 'user_csv' || catalog.profiles.length <= 1;
     const kalman = data.profile.config?.kind === 'kalman' || profile === 'kalman';
     $('profile-note').textContent = data.profile.applied_in_export ? data.profile.label : profile === 'original' ? 'Consensus + hysteresis' : profile === 'threshold' ? 'Higher precision · lower recall' : 'Experimental · fewer alerts, more misses';
     $('model-line-note').textContent = kalman ? 'Solid: filtered · dashed: raw provisional' : 'Solid: final · dashed: provisional';
-    document.querySelector('.download').textContent = 'Original data ↓';
-    document.querySelector('.download').title = 'Download the original full export; alert comparison modes do not change it';
+    document.querySelector('.download').textContent = 'Inference data ↓';
+    document.querySelector('.download').href = `/api/updates/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`;
+    document.querySelector('.download').title = 'Download timestamped predictions and target GPS locations';
     $('session-meta').textContent = `${data.session.samples.toLocaleString()} samples · ${clock(data.session.duration_s)} drive · 100 Hz inputs`;
     $('duration').textContent = clock(data.duration_s);
     $('seek').max = String(data.duration_s);
     $('seek').disabled = false; $('play').disabled = false;
     $('loading').hidden = true;
-    $('place').textContent = data.session.dataset === 'kaggle' ? 'Larisa, Greece' : 'M13 · Copenhagen, Denmark';
+    $('place').textContent = data.session.dataset === 'user_csv' ? label(data.session) : data.session.dataset === 'kaggle' ? 'Larisa, Greece' : 'M13 · Copenhagen, Denmark';
     const isLira = data.session.dataset === 'lira_cd';
-    $('gyro-missing').hidden = !isLira;
-    $('gyro-footer').textContent = isLira ? 'Missing input · not synthesized' : 'Recorded sensor axes';
-    $('task-note').textContent = isLira
+    const missingGyro = isLira || data.session.gyro_available === false;
+    $('gyro-missing').hidden = !missingGyro;
+    $('gyro-missing').querySelector('span').textContent = 'The model uses acceleration and speed; gyro is optional for display.';
+    $('gyro-footer').textContent = missingGyro ? 'Not recorded' : 'Recorded sensor axes';
+    $('task-note').textContent = data.session.dataset === 'user_csv'
+      ? 'Your recording · model predictions without reference labels. Missing GPS leaves the map empty; sensor inference continues.' : isLira
       ? 'LiRA provides measured roughness. Disturbance predictions have no reference labels here.'
       : 'Kaggle provides disturbance labels. Roughness estimates have no measured IRI reference here.';
     if (data.gps.length) map.setView(data.gps[0].slice(1), 16, {animate: false});
@@ -124,7 +209,7 @@ function paintQuality(row) {
   const fix = engine.data.gps[index], previous = engine.data.gps[index - 1];
   if (!fix) return;
   const options = {color: COLORS[row.quality_grade], weight: 6, opacity: .88, pane: 'quality', renderer};
-  const tooltip = `${NAMES[row.quality_grade]} · ${row.iri_m_per_km.toFixed(2)} m/km<br>Target ${clock(row.start_s, true)} · final at ${clock(row.available_s, true)}`;
+  const tooltip = `${qualityText(row)}<br>Target ${clock(row.start_s, true)} · final at ${clock(row.available_s, true)}`;
   if (existing) {
     existing.layer.setStyle(options).setTooltipContent(tooltip);
     existing.patch = row.target_patch;
@@ -169,7 +254,7 @@ function syncMap(changed, reset) {
     if (!row.valid || !row.target_gps_valid) continue;
     L.circleMarker([row.target_latitude_deg, row.target_longitude_deg], {
       radius: 5, color: '#758b68', fill: false, weight: 1.3, dashArray: '2,3', pane: 'alerts', renderer,
-    }).bindTooltip(`Provisional · ${row.iri_m_per_km.toFixed(2)} m/km<br>No final disturbance decision yet`).addTo(pendingLayer);
+    }).bindTooltip(`Provisional · ${qualityText(row)}<br>No final disturbance decision yet`).addTo(pendingLayer);
   }
   const gps = engine.gps;
   if (!gps.valid) {
@@ -209,18 +294,21 @@ function renderReadout() {
   $('seek').value = String(engine.time);
   const progress = engine.time / engine.data.duration_s * 100;
   $('seek').style.background = `linear-gradient(to right,#689977 ${progress}%,#e6ece3 ${progress}%)`;
-  const label = engine.ended ? 'Drive complete · tail remains provisional' : playing ? 'Playing recorded test data' : 'Paused · explore the timeline';
+  const label = engine.ended ? 'Drive complete · tail remains provisional' : playing ? 'Playing recorded drive' : 'Paused · explore the timeline';
   $('playback-label').textContent = label;
   $('map-status').innerHTML = `<i></i>${engine.ended ? 'DRIVE COMPLETE' : playing ? 'REPLAY IN PROGRESS' : 'REPLAY PAUSED'}`;
   $('coverage').textContent = `${Math.max(0, engine.sampleIndex + 1).toLocaleString()} / ${engine.data.session.samples.toLocaleString()} samples observed`;
-  const origin = Number(engine.data.session.timestamp_origin_unix_ns) / 1e6;
-  $('utc-clock').textContent = new Date(origin + engine.time * 1000).toISOString().replace('T', ' ').slice(0, 23) + ' UTC';
+  const originValue = engine.data.session.timestamp_origin_unix_ns;
+  const origin = Number(originValue) / 1e6;
+  $('utc-clock').textContent = originValue == null ? `Relative drive time · ${clock(engine.time, true)}` : new Date(origin + engine.time * 1000).toISOString().replace('T', ' ').slice(0, 23) + ' UTC';
+  const ordinal = engine.data.session.quality_mode === 'ordinal';
+  const grade = final?.valid ? final.quality_grade : null;
   const iri = final?.valid ? final.iri_m_per_km : null;
-  $('iri').textContent = iri == null ? '—' : iri.toFixed(2);
-  $('quality-badge').textContent = iri == null ? 'Waiting' : NAMES[final.quality_grade];
-  $('quality-badge').style.color = iri == null ? '#74886b' : COLORS[final.quality_grade];
-  $('quality-badge').style.background = iri == null ? '#edf4ee' : COLORS[final.quality_grade] + '14';
-  $('quality-pointer').style.left = `${iri == null ? 0 : Math.min(99, iri / 8 * 100)}%`;
+  $('iri').textContent = ordinal ? grade == null ? '—' : NAMES[grade] : iri == null ? '—' : iri.toFixed(2);
+  $('quality-badge').textContent = grade == null ? 'Waiting' : ordinal ? `${(final.quality_probability[grade]*100).toFixed(0)}%` : NAMES[grade];
+  $('quality-badge').style.color = grade == null ? '#74886b' : COLORS[grade];
+  $('quality-badge').style.background = grade == null ? '#edf4ee' : COLORS[grade] + '14';
+  $('quality-pointer').style.left = `${ordinal ? grade == null ? 0 : (grade+.5)/3*100 : iri == null ? 0 : Math.min(99, iri / 8 * 100)}%`;
   $('quality-note').textContent = final
     ? `Final for road time ${clock(final.start_s, true)}–${clock(final.end_s, true)}`
     : 'Waiting for the first finalized estimate';
@@ -329,7 +417,9 @@ function drawCharts() {
   drawSensors('acc-chart', ['accel_x', 'accel_y', 'accel_z']);
   drawSensors('gyro-chart', ['gyro_x', 'gyro_y', 'gyro_z']);
   const rows = modelRows.filter(row => row.end_s >= engine.time - 12);
-  const chart = canvasSetup($('model-chart'), 0, 8, true);
+  const ordinal = engine.data.session.quality_mode === 'ordinal';
+  const qualityMax = ordinal ? 2 : 8;
+  const chart = canvasSetup($('model-chart'), 0, qualityMax, true);
   shadeEvents(chart);
   for (const provisional of [false, true]) {
     const use = rows.filter(row => row.is_final !== provisional).sort((a, b) => a.start_s - b.start_s);
@@ -337,11 +427,11 @@ function drawCharts() {
     const iri = [], probability = [];
     for (const row of use) {
       for (const time of [row.start_s, Math.min(row.end_s, engine.time)]) {
-        iri.push([time, row.valid ? row.iri_m_per_km : null]);
+        iri.push([time, row.valid ? ordinal ? row.quality_grade : row.iri_m_per_km : null]);
         probability.push([time, row.valid ? row.probability : null]);
       }
     }
-    drawLine(chart, iri, '#289b7b', 0, 8, provisional);
+    drawLine(chart, iri, '#289b7b', 0, qualityMax, provisional);
     drawLine(chart, probability, '#d08061', 0, 1, provisional);
   }
 }
@@ -403,30 +493,22 @@ window.replaySnapshot = () => engine ? {
 } : null;
 
 try {
-  const response = await fetch('/api/catalog');
-  if (!response.ok) throw new Error(`Catalog request failed: HTTP ${response.status}`);
-  catalog = await response.json();
-  for (const dataset of ['kaggle', 'lira_cd']) {
-    const group = document.createElement('optgroup'); group.label = dataset === 'kaggle' ? 'Kaggle Road Quality' : 'LiRA-CD · M13 test road';
-    for (const session of catalog.sessions.filter(s => s.dataset === dataset)) {
-      const option = document.createElement('option'); option.value = session.session_id; option.textContent = label(session); group.append(option);
-    }
-    if (dataset === 'kaggle') $('session').replaceChildren(group); else $('session').append(group);
-  }
-  $('session').disabled = false;
-  $('profile').replaceChildren();
-  for (const profile of catalog.profiles) {
-    const option = document.createElement('option'); option.value = profile.id; option.textContent = profile.label;
-    $('profile').append(option);
-  }
-  $('profile').disabled = false;
+  await refreshCatalog();
   const tiles = L.tileLayer(catalog.tile_url, {maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors', keepBuffer: 2}).addTo(map);
   let failed = 0;
   tiles.on('tileerror', () => {failed++; if (failed >= 3) $('tile-warning').hidden = false;});
   tiles.on('tileload', () => {failed = 0; $('tile-warning').hidden = true;});
-  const id = catalog.sessions.some(s => s.session_id === params.get('drive')) ? params.get('drive') : catalog.sessions[0].session_id;
-  const profile = catalog.profiles.some(p => p.id === params.get('profile')) ? params.get('profile') : catalog.default_profile;
-  await loadSession(id, Number(params.get('t')) || 0, params.get('autoplay') !== '0', profile);
+  if (catalog.sessions.length) {
+    const id = catalog.sessions.some(s => s.session_id === params.get('drive')) ? params.get('drive') : catalog.sessions[0].session_id;
+    const profile = catalog.profiles.some(p => p.id === params.get('profile')) ? params.get('profile') : catalog.default_profile;
+    await loadSession(id, Number(params.get('t')) || 0, params.get('autoplay') !== '0', profile);
+  } else {
+    $('loading').hidden = true;
+    $('map-status').textContent = 'UPLOAD A DRIVE';
+    $('place').textContent = 'Your recording';
+    $('session-meta').textContent = 'No recordings yet';
+    $('map-caption').textContent = 'Upload a CSV above to run inference and replay your drive.';
+  }
 } catch (error) {
   $('loading').hidden = true; $('load-error').hidden = false; $('error-message').textContent = error.message;
 }
