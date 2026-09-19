@@ -38,6 +38,10 @@ DEFAULT_CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "road
 # road that bulges slightly outside the straight-line box between the two
 # points (e.g. going around a lake or highway interchange).
 ROUTE_BBOX_BUFFER_M = 2000.0
+# Cache bbox edges snap outward to this grid so nearby routes share a
+# cached graph instead of each computing (and downloading) their own
+# precise bbox. ~5.5km at the equator, coarser than any single test route.
+GRID_SIZE_DEG = 0.05
 # A mistyped or ambiguous address can geocode to the wrong side of the
 # world (confirmed: this happened during testing -- Overpass reported the
 # resulting bbox as "1,063 times" its normal query size and then hung for
@@ -135,6 +139,20 @@ def load_road_graph_for_route(
     lon_buffer_deg = buffer_m / (EARTH_RADIUS_M * max(0.1, math.cos(math.radians(mean_lat)))) * (180 / math.pi)
 
     bbox = (west - lon_buffer_deg, south - lat_buffer_deg, east + lon_buffer_deg, north + lat_buffer_deg)
+    # Snapped outward to a coarse grid (never shrinks the requested area) so
+    # that a second route nearby -- a very common case: same demo, slightly
+    # different address, or just retrying -- reuses the graph already on
+    # disk instead of hitting the flaky Overpass connection again. Without
+    # this, every unique origin/destination pair computed its own precise
+    # bbox and missed the cache even when it substantially overlapped an
+    # already-downloaded area (confirmed: three near-identical Waterloo
+    # queries during testing produced three different cache files).
+    bbox = (
+        math.floor(bbox[0] / GRID_SIZE_DEG) * GRID_SIZE_DEG,
+        math.floor(bbox[1] / GRID_SIZE_DEG) * GRID_SIZE_DEG,
+        math.ceil(bbox[2] / GRID_SIZE_DEG) * GRID_SIZE_DEG,
+        math.ceil(bbox[3] / GRID_SIZE_DEG) * GRID_SIZE_DEG,
+    )
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_key = "bbox_" + "_".join(f"{v:.3f}" for v in bbox).replace(".", "p").replace("-", "n")
