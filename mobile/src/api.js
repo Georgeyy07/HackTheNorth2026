@@ -45,9 +45,25 @@ export function deletePothole(id) {
   return request(`/api/potholes/${id}`, { method: 'DELETE' });
 }
 
-export function getRoute(origin, destination, avoidanceWeight) {
+export function updatePothole(id, { latitude, longitude, severity }) {
+  return request(`/api/potholes/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latitude, longitude, severity }),
+  });
+}
+
+export function getRoute(origin, destination, avoidanceWeight, originCoords = null, destCoords = null) {
   const params = new URLSearchParams({ origin, destination });
   if (avoidanceWeight !== undefined) params.set('avoidance_weight', String(avoidanceWeight));
+  if (originCoords && originCoords.lat !== undefined && originCoords.lon !== undefined) {
+    params.set('origin_lat', String(originCoords.lat));
+    params.set('origin_lon', String(originCoords.lon));
+  }
+  if (destCoords && destCoords.lat !== undefined && destCoords.lon !== undefined) {
+    params.set('dest_lat', String(destCoords.lat));
+    params.set('dest_lon', String(destCoords.lon));
+  }
   return request(`/api/route?${params.toString()}`);
 }
 

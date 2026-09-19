@@ -57,16 +57,24 @@ def load_road_graph(place: str, cache_dir: Path = DEFAULT_CACHE_DIR):
 
 def load_road_graph_for_route(
     origin_lat: float, origin_lon: float, dest_lat: float, dest_lon: float,
-    cache_dir: Path = DEFAULT_CACHE_DIR, buffer_m: float = ROUTE_BBOX_BUFFER_M,
+    cache_dir: Path = DEFAULT_CACHE_DIR, buffer_m: float = None,
 ):
     """Returns a networkx MultiDiGraph covering the drivable roads between
     (origin_lat, origin_lon) and (dest_lat, dest_lon), downloaded and cached
     by bounding box -- works anywhere in the world, not just one hardcoded
-    city (a fixed `place` name meant routing silently broke, or geocoded to
-    the wrong nearest node, for any city other than the one hardcoded).
-    Every edge carries `length` (meters), `speed_kph`, and `travel_time` (seconds)."""
+    city. Every edge carries `length` (meters), `speed_kph`, and `travel_time` (seconds)."""
     south, north = sorted((origin_lat, dest_lat))
     west, east = sorted((origin_lon, dest_lon))
+
+    if buffer_m is None:
+        approx_dist_m = haversine_distance_m(origin_lat, origin_lon, dest_lat, dest_lon)
+        # Adapt buffer for long routes to avoid downloading gigantic bounding boxes
+        if approx_dist_m > 20000:
+            buffer_m = 1000.0
+        elif approx_dist_m > 10000:
+            buffer_m = 1400.0
+        else:
+            buffer_m = ROUTE_BBOX_BUFFER_M
 
     lat_buffer_deg = buffer_m / EARTH_RADIUS_M * (180 / math.pi)
     mean_lat = (south + north) / 2
@@ -91,10 +99,38 @@ def load_road_graph_for_route(
     return graph
 
 
+from functools import lru_cache
+
+_KNOWN_PLACES = {
+    "university of waterloo": (43.4723, -80.5449),
+    "university of waterloo, waterloo, on": (43.4723, -80.5449),
+    "waterloo public square": (43.4623, -80.5224),
+    "waterloo public square, waterloo, on": (43.4623, -80.5224),
+    "waterloo park": (43.4685, -80.5312),
+    "laurier": (43.4738, -80.5275),
+    "wilfrid laurier university": (43.4738, -80.5275),
+}
+
+
+@lru_cache(maxsize=256)
 def geocode_address(address: str) -> tuple[float, float]:
     """Turns a human address/place string (e.g. "200 University Ave W, Waterloo, ON")
     into (lat, lon) via OpenStreetMap's Nominatim geocoder. Needs network access;
     raises ValueError if Nominatim can't find a match."""
+    cleaned = address.strip()
+    # Check if raw coordinate format "lat, lon"
+    if "," in cleaned:
+        parts = cleaned.split(",")
+        if len(parts) == 2:
+            try:
+                return float(parts[0].strip()), float(parts[1].strip())
+            except ValueError:
+                pass
+
+    lower = cleaned.lower()
+    if lower in _KNOWN_PLACES:
+        return _KNOWN_PLACES[lower]
+
     try:
         return ox.geocode(address)
     except Exception as exc:  # osmnx raises its own InsufficientResponseError etc.
@@ -158,12 +194,15 @@ def suggest_addresses(query: str, limit: int = 5) -> List[AddressSuggestion]:
 
 def nearest_node(graph, lat: float, lon: float):
     """Finds the graph node closest to a raw GPS coordinate.
-
-    A plain linear scan with our own haversine math, rather than
-    osmnx's KDTree-backed `nearest_nodes` (which needs scikit-learn) --
-    fine at the few-thousand-node scale of a single city's road graph.
-    """
-    return min(
-        graph.nodes,
-        key=lambda n: haversine_distance_m(lat, lon, graph.nodes[n]["y"], graph.nodes[n]["x"]),
-    )
+    Uses fast local equirectangular degree projection instead of full haversine scan."""
+    cos_lat = math.cos(math.radians(lat))
+    best_node = None
+    best_dist_sq = math.inf
+    for n, data in graph.nodes.items():
+        dy = lat - data["y"]
+        dx = (lon - data["x"]) * cos_lat
+        d_sq = dy * dy + dx * dx
+        if d_sq < best_dist_sq:
+            best_dist_sq = d_sq
+            best_node = n
+    return best_node

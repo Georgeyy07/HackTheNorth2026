@@ -5,11 +5,10 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import PotholesScreen from './src/screens/PotholesScreen';
 import RouteFinderScreen from './src/screens/RouteFinderScreen';
+import { COLORS } from './src/theme';
 
 const Tab = createBottomTabNavigator();
 
-// Turn notifications should show even while the app is in the foreground
-// (that's when you're actually driving and looking at the map).
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -23,17 +22,39 @@ Notifications.setNotificationHandler({
 export default function App() {
   return (
     <NavigationContainer>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Tab.Navigator
+        initialRouteName="RouteFinder"
         screenOptions={{
           headerShown: false,
-          tabBarStyle: { backgroundColor: '#111827', borderTopColor: '#1f2937' },
-          tabBarActiveTintColor: '#00f2fe',
-          tabBarInactiveTintColor: '#6b7280',
+          tabBarStyle: {
+            backgroundColor: COLORS.parchmentSurface,
+            borderTopColor: COLORS.parchmentBorderDark,
+            borderTopWidth: 1.5,
+            height: 56,
+            paddingBottom: 6,
+            paddingTop: 6,
+          },
+          tabBarLabelStyle: {
+            fontFamily: 'serif',
+            fontSize: 11,
+            fontWeight: '700',
+            letterSpacing: 0.3,
+          },
+          tabBarActiveTintColor: COLORS.forestPine,
+          tabBarInactiveTintColor: COLORS.inkMuted,
         }}
       >
-        <Tab.Screen name="Potholes" component={PotholesScreen} options={{ title: 'Potholes' }} />
-        <Tab.Screen name="RouteFinder" component={RouteFinderScreen} options={{ title: 'Route Finder' }} />
+        <Tab.Screen
+          name="RouteFinder"
+          component={RouteFinderScreen}
+          options={{ title: 'Route Map' }}
+        />
+        <Tab.Screen
+          name="Potholes"
+          component={PotholesScreen}
+          options={{ title: 'Potholes' }}
+        />
       </Tab.Navigator>
     </NavigationContainer>
   );

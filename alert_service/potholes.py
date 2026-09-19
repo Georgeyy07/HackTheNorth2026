@@ -27,6 +27,8 @@ from typing import Iterable, List
 
 from .alert_math import PotholeReport, haversine_distance_m
 
+import time
+
 # The local SQLite fallback (road_viewer.tiger_db's dev-only path) still uses
 # this older string-enum severity; the live Postgres table uses a 0-10
 # severity_score instead (divided by 10 to fit PotholeReport's 0-1 scale).
@@ -68,10 +70,24 @@ def _find_postgres_severity_column(cursor) -> str:
         f"actual columns: {sorted(existing)}. The live schema changed again -- add the new name."
     )
 
+_POTHOLES_CACHE = None
+_POTHOLES_CACHE_TIME = 0.0
 
-def fetch_active_potholes() -> List[PotholeReport]:
+
+def invalidate_potholes_cache():
+    global _POTHOLES_CACHE
+    _POTHOLES_CACHE = None
+
+
+def fetch_active_potholes(force_refresh: bool = False) -> List[PotholeReport]:
     """Synchronous fetch of every currently-active pothole report. Branches on
-    whichever backend road_viewer.tiger_db actually connected to."""
+    whichever backend road_viewer.tiger_db actually connected to. Cached for 30s to avoid
+    re-establishing cloud DB SSL connections on every route calculation."""
+    global _POTHOLES_CACHE, _POTHOLES_CACHE_TIME
+    now = time.time()
+    if not force_refresh and _POTHOLES_CACHE is not None and (now - _POTHOLES_CACHE_TIME) < 30.0:
+        return _POTHOLES_CACHE
+
     from road_viewer import tiger_db
 
     conn = tiger_db.get_db_connection()
@@ -82,17 +98,20 @@ def fetch_active_potholes() -> List[PotholeReport]:
             cursor.execute(f"SELECT id, latitude, longitude, {severity_column} FROM potholes WHERE is_active = true")
             rows = cursor.fetchall()
             # Assumes a 0-10 scale (true for every name this column has had so far).
-            return [
+            result = [
                 PotholeReport(id=str(pid), lat=lat, lon=lon, severity=min(1.0, max(0.0, score / 10.0)))
                 for pid, lat, lon, score in rows
             ]
         else:
             cursor.execute("SELECT id, latitude, longitude, severity FROM potholes")
             rows = cursor.fetchall()
-            return [
+            result = [
                 PotholeReport(id=str(pid), lat=lat, lon=lon, severity=SEVERITY_TO_SCORE.get(severity, 0.5))
                 for pid, lat, lon, severity in rows
             ]
+        _POTHOLES_CACHE = result
+        _POTHOLES_CACHE_TIME = now
+        return result
     finally:
         cursor.close()
         conn.close()

@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
-from alert_service.potholes import fetch_active_potholes, severity_label
+from alert_service.potholes import fetch_active_potholes, severity_label, invalidate_potholes_cache
 from route_planner.cost import RoutingConfig
 from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node, suggest_addresses
 from route_planner.router import find_routes
@@ -181,6 +181,7 @@ def create_app(export=None, filters=None):
             longitude=float(payload["longitude"]),
             severity=str(payload.get("severity", "MEDIUM"))
         )
+        invalidate_potholes_cache()
         return new_record
 
     @app.put("/api/potholes/{pothole_id}")
@@ -193,6 +194,7 @@ def create_app(export=None, filters=None):
         )
         if not success:
             raise HTTPException(404, "Pothole not found or no changes made")
+        invalidate_potholes_cache()
         return {"status": "ok", "id": pothole_id}
 
     @app.delete("/api/potholes/{pothole_id}")
@@ -200,11 +202,13 @@ def create_app(export=None, filters=None):
         success = delete_pothole(pothole_id)
         if not success:
             raise HTTPException(404, "Pothole not found")
+        invalidate_potholes_cache()
         return {"status": "ok", "deleted_id": pothole_id}
 
     @app.post("/api/potholes/seed")
     def seed_potholes():
         seed_sample_potholes()
+        invalidate_potholes_cache()
         return {"status": "ok", "potholes": get_potholes()}
 
     @app.get("/api/geocode/suggest")
@@ -212,12 +216,35 @@ def create_app(export=None, filters=None):
         return suggest_addresses(q, limit=limit)
 
     @app.get("/api/route")
-    def compute_route(origin: str, destination: str, avoidance_weight: float = 3.0):
+    def compute_route(
+        origin: str = "",
+        destination: str = "",
+        avoidance_weight: float = 3.0,
+        origin_lat: float = None,
+        origin_lon: float = None,
+        dest_lat: float = None,
+        dest_lon: float = None,
+    ):
         try:
-            origin_lat, origin_lon = geocode_address(origin)
-            dest_lat, dest_lon = geocode_address(destination)
+            if origin_lat is None or origin_lon is None:
+                origin_lat, origin_lon = geocode_address(origin)
+            if dest_lat is None or dest_lon is None:
+                dest_lat, dest_lon = geocode_address(destination)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+
+        # 1. Ultra-fast route engine using OSRM + local pothole snapping (~300ms, no Overpass timeout)
+        try:
+            from route_planner.fast_router import compute_fast_osrm_routes
+            return compute_fast_osrm_routes(
+                origin_lat=origin_lat,
+                origin_lon=origin_lon,
+                dest_lat=dest_lat,
+                dest_lon=dest_lon,
+                avoidance_weight=avoidance_weight,
+            )
+        except Exception as osrm_err:
+            print(f"[fast_router] OSRM fast route fallback to local graph: {osrm_err}")
 
         graph = _route_graph(origin_lat, origin_lon, dest_lat, dest_lon)
         origin_node = nearest_node(graph, origin_lat, origin_lon)
@@ -242,7 +269,7 @@ def create_app(export=None, filters=None):
         # avoids potholes vs. chasing ETA. All three collapse toward "Fastest"
         # as avoidance_weight -> 0, at which point find_routes backfills real
         # alternate routes instead of returning duplicates.
-        presets = [("Fastest", 0.0), ("Recommended", avoidance_weight), ("Max avoidance", 15.0)]
+        presets = [("Best", avoidance_weight), ("Fastest", 0.0), ("Smoothest", 15.0)]
 
         try:
             result = find_routes(graph, origin_node, dest_node, potholes, presets=presets, config=RoutingConfig())

@@ -6,23 +6,24 @@ import {
   StyleSheet,
   SafeAreaView,
   ScrollView,
-  ActivityIndicator,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 
-import { getRoute } from '../api';
+import { getRoute, getPotholes } from '../api';
 import { TurnByTurnTracker } from '../navigation';
 import AddressInput from '../components/AddressInput';
-
-// Routes are already returned fastest-first by the backend, so index == rank.
-// Rank is shown as shades of the same red (darkest = fastest), not different
-// hues, so it reads as "same family of options, ranked" rather than
-// unrelated route colors.
-const ROUTE_SHADES = ['#ff2d55', '#ff8095', '#ffc2cc'];
-const RISK_COLORS = { None: '#159c78', LOW: '#caaa50', MEDIUM: '#e78043', HIGH: '#c95268', CRITICAL: '#8b1e3f' };
+import { COLORS, WoodButton, MAP_STYLE_PARCHMENT } from '../theme';
+import {
+  SearchIcon,
+  PlusCircleIcon,
+  CrosshairIcon,
+  SwapIcon,
+  HazardPin,
+  CompassRose,
+} from '../components/Icons';
+import { ParchmentMap, Marker, Polyline } from '../components/ParchmentMap';
 
 function toLatLng(coords) {
   return coords.map(([lat, lon]) => ({ latitude: lat, longitude: lon }));
@@ -34,41 +35,110 @@ async function announce(title, body) {
 
 const MAX_POTHOLE_CARE = 15;
 
-function potholeCareLabel(value) {
-  if (value <= 0) return "Don't care -- fastest route only";
-  if (value <= 4) return 'A little';
-  if (value <= 9) return 'Balanced';
-  if (value <= 13) return 'A lot';
-  return 'Avoid at all costs';
-}
-
 export default function RouteFinderScreen() {
   const [origin, setOrigin] = useState('University of Waterloo, Waterloo, ON');
   const [destination, setDestination] = useState('Waterloo Public Square, Waterloo, ON');
-  const [potholeCare, setPotholeCare] = useState(3);
+  const [originCoords, setOriginCoords] = useState({ lat: 43.4723, lon: -80.5449 });
+  const [destCoords, setDestCoords] = useState({ lat: 43.4623, lon: -80.5224 });
+
+  // Map tap selection mode: null | 'origin' | 'destination'
+  const [mapPickTarget, setMapPickTarget] = useState(null);
+  const [topSectionHeight, setTopSectionHeight] = useState(60);
+
+  const [potholeCare, setPotholeCare] = useState(6);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  // Route planner modal/editor state
+  const [isEditingRoute, setIsEditingRoute] = useState(false);
+
+  // Potholes in database
+  const [allPotholes, setAllPotholes] = useState([]);
+
+  // Navigation mode
   const [navigating, setNavigating] = useState(false);
   const [currentInstruction, setCurrentInstruction] = useState(null);
+  const [nextTurnDistance, setNextTurnDistance] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
+
   const trackerRef = useRef(null);
   const subscriptionRef = useRef(null);
   const mapRef = useRef(null);
 
+  // Tap map to set Departure or Arrival point directly on the map
+  const handleMapPress = (e) => {
+    const coord = e.nativeEvent?.coordinate;
+    if (!coord) return;
+    const lat = Number(coord.latitude.toFixed(5));
+    const lon = Number(coord.longitude.toFixed(5));
+
+    if (mapPickTarget === 'origin') {
+      setOriginCoords({ lat, lon });
+      setOrigin(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+      // Auto advance to destination for smooth 2-tap route setup
+      setMapPickTarget('destination');
+    } else if (mapPickTarget === 'destination') {
+      setDestCoords({ lat, lon });
+      setDestination(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+      setMapPickTarget(null);
+    } else {
+      // Default: set destination point when tapped
+      setDestCoords({ lat, lon });
+      setDestination(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+    }
+  };
+
+  useEffect(() => {
+    getPotholes()
+      .then((data) => setAllPotholes(data || []))
+      .catch(() => { });
+    // Initial fetch to populate default route
+    handleFindRoutes();
+  }, []);
+
+  const handleSwapAddresses = () => {
+    const tempO = origin;
+    const tempOCoords = originCoords;
+    setOrigin(destination);
+    setOriginCoords(destCoords);
+    setDestination(tempO);
+    setDestCoords(tempOCoords);
+  };
+
   const handleFindRoutes = async () => {
+    if (!origin.trim() || !destination.trim()) {
+      setError('Please provide origin and destination.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const data = await getRoute(origin, destination, potholeCare);
+      const data = await getRoute(
+        origin.trim(),
+        destination.trim(),
+        potholeCare,
+        originCoords,
+        destCoords
+      );
+      // Ensure 'Recommended' is always first in the list of routes
+      const sortedRoutes = [...(data.routes || [])].sort((a, b) => {
+        if (a.label === 'Recommended') return -1;
+        if (b.label === 'Recommended') return 1;
+        return 0;
+      });
+      data.routes = sortedRoutes;
       setResult(data);
-      // Default to the route that actually reflects the user's slider choice,
-      // not just whichever sorted first -- falls back to index 0 (Fastest)
-      // if "Recommended" collapsed into it (e.g. slider at 0).
-      const recommendedIndex = data.routes.findIndex((r) => r.label === 'Recommended');
-      setSelectedIndex(recommendedIndex >= 0 ? recommendedIndex : 0);
+      if (data.origin) {
+        setOriginCoords({ lat: data.origin.lat, lon: data.origin.lon });
+      }
+      if (data.destination) {
+        setDestCoords({ lat: data.destination.lat, lon: data.destination.lon });
+      }
+      setSelectedIndex(0);
+      setIsEditingRoute(false);
     } catch (err) {
       setError(err.message);
       setResult(null);
@@ -77,20 +147,34 @@ export default function RouteFinderScreen() {
     }
   };
 
-  // Fit the map to the whole route once results arrive. Using an imperative
-  // fit here (rather than a controlled `region` prop recomputed every
-  // render) avoids fighting the map's own gesture/zoom state -- a `region`
-  // prop that's a fresh object on every render forces the native map to
-  // re-center constantly, which on iOS can suppress overlay rendering.
+  // Re-fit map when routes arrive
   useEffect(() => {
-    if (result && result.routes.length > 0 && mapRef.current) {
+    if (result && result.routes.length > 0 && mapRef.current?.fitToCoordinates) {
       const allCoords = result.routes.flatMap((r) => toLatLng(r.coords));
       mapRef.current.fitToCoordinates(allCoords, {
-        edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
+        edgePadding: { top: 140, right: 50, bottom: 260, left: 50 },
         animated: true,
       });
     }
   }, [result]);
+
+  const recenterMap = () => {
+    if (userLocation && mapRef.current?.animateToRegion) {
+      mapRef.current.animateToRegion({
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      });
+    } else if (result?.origin && mapRef.current?.animateToRegion) {
+      mapRef.current.animateToRegion({
+        latitude: result.origin.lat,
+        longitude: result.origin.lon,
+        latitudeDelta: 0.03,
+        longitudeDelta: 0.03,
+      });
+    }
+  };
 
   const stopNavigation = useCallback(() => {
     subscriptionRef.current?.remove();
@@ -98,6 +182,7 @@ export default function RouteFinderScreen() {
     trackerRef.current = null;
     setNavigating(false);
     setCurrentInstruction(null);
+    setNextTurnDistance(null);
   }, []);
 
   const startNavigation = async () => {
@@ -108,17 +193,19 @@ export default function RouteFinderScreen() {
       Location.requestForegroundPermissionsAsync(),
       Notifications.requestPermissionsAsync(),
     ]);
+
     if (locationPerm.status !== 'granted') {
       setError('Location permission is required to navigate.');
       return;
     }
     if (notificationPerm.status !== 'granted') {
-      setError('Notification permission was denied -- turn alerts will only show in-app.');
+      setError('Notification permission denied: turn alerts will show in-app only.');
     }
 
     trackerRef.current = new TurnByTurnTracker(route.directions);
     setNavigating(true);
-    setCurrentInstruction(trackerRef.current.currentStep?.instruction || 'Head out');
+    setIsEditingRoute(false);
+    setCurrentInstruction(trackerRef.current.currentStep?.instruction || 'Proceed to route');
 
     subscriptionRef.current = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
@@ -126,21 +213,33 @@ export default function RouteFinderScreen() {
         const { latitude, longitude } = position.coords;
         setUserLocation({ latitude, longitude });
 
+        if (mapRef.current?.animateToRegion) {
+          mapRef.current.animateToRegion({
+            latitude,
+            longitude,
+            latitudeDelta: 0.008,
+            longitudeDelta: 0.008,
+          });
+        }
+
         const tracker = trackerRef.current;
         if (!tracker) return;
         const event = tracker.update(latitude, longitude);
         if (!event) return;
 
         if (event.type === 'turn_ahead') {
-          const msg = `${event.step.instruction} in ${Math.round(event.distance)}m`;
+          const dist = Math.round(event.distance);
+          setNextTurnDistance(dist);
+          const msg = `${event.step.instruction} in ${dist}m`;
           setCurrentInstruction(msg);
           announce('Upcoming turn', msg);
         } else if (event.type === 'turn_now') {
+          setNextTurnDistance(0);
           setCurrentInstruction(event.step.instruction);
           announce('Turn now', event.step.instruction);
         } else if (event.type === 'arrived') {
-          setCurrentInstruction("You've arrived");
-          announce('Arrived', "You've reached your destination");
+          setCurrentInstruction('You have arrived');
+          announce('Arrived', 'You have reached your destination');
           stopNavigation();
         }
       }
@@ -154,188 +253,915 @@ export default function RouteFinderScreen() {
     longitudeDelta: 0.05,
   };
 
+  const selectedRoute = result?.routes[selectedIndex];
+  const selectedRoutePotholes = selectedRoute?.potholes_encountered || [];
+  const riskPercentage = Math.min(100, Math.round((potholeCare / MAX_POTHOLE_CARE) * 100));
+
+  // Destination display label
+  const destinationShort = destination.split(',')[0].trim() || 'destination';
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Route Finder</Text>
-        <Text style={styles.subtitle}>Efficiency vs potholes</Text>
-      </View>
-
-      <View style={styles.form}>
-        <AddressInput
-          placeholder="Origin address"
-          value={origin}
-          onChangeText={setOrigin}
-          editable={!navigating}
-        />
-        <AddressInput
-          placeholder="Destination address"
-          value={destination}
-          onChangeText={setDestination}
-          editable={!navigating}
-        />
-
-        <View style={styles.sliderRow}>
-          <Text style={styles.sliderLabel}>How much do you care about potholes?</Text>
-          <Text style={styles.sliderValue}>{potholeCareLabel(potholeCare)}</Text>
-        </View>
-        <Slider
-          style={styles.slider}
-          minimumValue={0}
-          maximumValue={MAX_POTHOLE_CARE}
-          step={1}
-          value={potholeCare}
-          onValueChange={setPotholeCare}
-          disabled={navigating}
-          minimumTrackTintColor="#ff2d55"
-          maximumTrackTintColor="#374151"
-          thumbTintColor="#ff2d55"
-        />
-        <View style={styles.sliderEndLabels}>
-          <Text style={styles.sliderEndLabel}>Fastest</Text>
-          <Text style={styles.sliderEndLabel}>Avoid potholes</Text>
-        </View>
-
-        <TouchableOpacity style={styles.button} onPress={handleFindRoutes} disabled={loading || navigating}>
-          {loading ? <ActivityIndicator color="#0b0f19" /> : <Text style={styles.buttonText}>Find routes</Text>}
-        </TouchableOpacity>
-      </View>
-
-      {error && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      )}
-
-      {navigating && (
-        <View style={styles.navBanner}>
-          <Text style={styles.navBannerLabel}>NAVIGATING</Text>
-          <Text style={styles.navBannerInstruction}>{currentInstruction}</Text>
-          <TouchableOpacity style={styles.stopButton} onPress={stopNavigation}>
-            <Text style={styles.stopButtonText}>Stop</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      <View style={styles.mapContainer}>
-        <MapView ref={mapRef} provider={PROVIDER_DEFAULT} style={styles.map} initialRegion={initialRegion}>
-          {/* Draw worse-ranked (lighter) routes first, best route last, so it renders on top */}
-          {result && [...result.routes]
-            .map((route, i) => ({ route, i }))
-            .sort((a, b) => (a.i === selectedIndex ? 1 : b.i === selectedIndex ? -1 : b.i - a.i))
-            .map(({ route, i }) => (
-              <Polyline
-                key={route.label}
-                coordinates={toLatLng(route.coords)}
-                strokeColor={ROUTE_SHADES[i] || ROUTE_SHADES[ROUTE_SHADES.length - 1]}
-                strokeWidth={i === selectedIndex ? 6 : 4}
-              />
-            ))}
-          {result && (
-            <>
-              <Marker coordinate={{ latitude: result.origin.lat, longitude: result.origin.lon }} title="Origin" pinColor="dodgerblue" />
-              <Marker coordinate={{ latitude: result.destination.lat, longitude: result.destination.lon }} title="Destination" pinColor="dodgerblue" />
-            </>
-          )}
-          {result && result.routes[selectedIndex]?.potholes_encountered.map((p) => (
-            <Marker
-              key={p.id}
-              coordinate={{ latitude: p.lat, longitude: p.lon }}
-              title={`${p.severity} pothole`}
-              pinColor="red"
-            />
-          ))}
-          {userLocation && <Marker coordinate={userLocation} title="You" pinColor="dodgerblue" />}
-        </MapView>
-      </View>
-
-      {result && (
-        <ScrollView style={styles.results}>
-          {result.unmatched_potholes > 0 && (
-            <Text style={styles.unmatchedText}>
-              {result.unmatched_potholes} pothole report(s) too far from any road to route around.
-            </Text>
-          )}
-          {result.routes.map((route, i) => {
-            const riskColor = RISK_COLORS[route.risk_rating] || '#789c8b';
-            const mins = Math.floor(route.duration_s / 60);
-            const secs = Math.round(route.duration_s % 60);
-            const potholeList = route.potholes_encountered.length
-              ? route.potholes_encountered.map((p) => `${p.severity} #${p.id.slice(0, 8)}`).join(', ')
-              : 'none on this route';
+    <View style={styles.container}>
+      {/* UNIVERSAL PARCHMENT MAP */}
+      <ParchmentMap
+        ref={mapRef}
+        customMapStyle={MAP_STYLE_PARCHMENT}
+        initialRegion={initialRegion}
+        routes={result?.routes}
+        selectedIndex={selectedIndex}
+        origin={originCoords || result?.origin}
+        destination={destCoords || result?.destination}
+        potholes={selectedRoutePotholes.length > 0 ? selectedRoutePotholes : allPotholes}
+        onPress={handleMapPress}
+      >
+        {/* Dashed Terracotta Route Polyline */}
+        {result &&
+          result.routes.map((route, i) => {
+            const isSelected = i === selectedIndex;
             return (
-              <TouchableOpacity
-                key={route.label}
-                style={[
-                  styles.routeCard,
-                  { borderLeftColor: ROUTE_SHADES[i] || ROUTE_SHADES[ROUTE_SHADES.length - 1] },
-                  i === selectedIndex && styles.routeCardSelected,
-                ]}
-                onPress={() => !navigating && setSelectedIndex(i)}
-                disabled={navigating}
-              >
-                <View style={styles.routeCardHeader}>
-                  <Text style={styles.routeLabel}>{route.label}</Text>
-                  <View style={[styles.riskBadge, { backgroundColor: `${riskColor}22`, borderColor: riskColor }]}>
-                    <Text style={[styles.riskBadgeText, { color: riskColor }]}>{route.risk_rating} risk</Text>
-                  </View>
-                </View>
-                <Text style={styles.routeMeta}>{Math.round(route.distance_m)}m · ETA {mins}m {secs}s · {route.directions.length} turns</Text>
-                <Text style={styles.routePotholes}>{route.pothole_count} pothole{route.pothole_count === 1 ? '' : 's'}: {potholeList}</Text>
-              </TouchableOpacity>
+              <Polyline
+                key={`route-${route.label}-${i}`}
+                coordinates={toLatLng(route.coords)}
+                strokeColor={isSelected ? COLORS.terracotta : '#bba282'}
+                strokeWidth={isSelected ? 6 : 4}
+                lineDashPattern={isSelected ? [8, 5] : undefined}
+                zIndex={isSelected ? 10 : 5}
+              />
             );
           })}
 
-          {!navigating && (
-            <TouchableOpacity style={styles.navigateButton} onPress={startNavigation}>
-              <Text style={styles.navigateButtonText}>Start Navigation</Text>
-            </TouchableOpacity>
-          )}
-        </ScrollView>
-      )}
-    </SafeAreaView>
+        {/* Departure Marker A (Always rendered when coordinate exists) */}
+        {originCoords && (
+          <Marker
+            coordinate={{ latitude: originCoords.lat, longitude: originCoords.lon }}
+            title="Departure (A)"
+          >
+            <View style={styles.originMarker}>
+              <Text style={styles.markerText}>A</Text>
+            </View>
+          </Marker>
+        )}
+
+        {/* Arrival Marker B (Always rendered when coordinate exists) */}
+        {destCoords && (
+          <Marker
+            coordinate={{ latitude: destCoords.lat, longitude: destCoords.lon }}
+            title="Arrival (B)"
+          >
+            <View style={styles.destMarker}>
+              <Text style={styles.markerText}>B</Text>
+            </View>
+          </Marker>
+        )}
+
+        {/* Route pothole pins */}
+        {selectedRoutePotholes.map((p) => (
+          <Marker
+            key={`route-pothole-${p.id}`}
+            coordinate={{ latitude: p.lat, longitude: p.lon }}
+            title={`${p.severity} Pothole`}
+          >
+            <HazardPin severity={p.severity} />
+          </Marker>
+        ))}
+
+        {/* User GPS location marker */}
+        {userLocation && (
+          <Marker coordinate={userLocation} title="You">
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationDot} />
+            </View>
+          </Marker>
+        )}
+      </ParchmentMap>
+
+      {/* FLOATING HUD & CONTROLS OVERLAY */}
+      <SafeAreaView pointerEvents="box-none" style={styles.safeOverlay}>
+        {/* TOP SECTION: SEARCH PILL OR EXPANDED ROUTE PLANNER */}
+        {!navigating ? (
+          <View
+            style={styles.topSection}
+            onLayout={(e) => {
+              const h = e.nativeEvent?.layout?.height;
+              if (h && h > 0) setTopSectionHeight(h);
+            }}
+          >
+            {!isEditingRoute ? (
+              /* COLLAPSED SEARCH PILL: "to [destination]" WITH EDIT (+) BUTTON */
+              <TouchableOpacity
+                style={styles.searchPillBar}
+                activeOpacity={0.88}
+                onPress={() => setIsEditingRoute(true)}
+              >
+                <SearchIcon size={20} color={COLORS.terracotta} />
+                <Text style={styles.searchPillText} numberOfLines={1}>
+                  to {destinationShort}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              /* EXPANDED ROUTE PLANNER: INPUTS -> SLIDER -> FIND ROUTES BUTTON */
+              <View style={styles.routePlannerCard}>
+                <View style={styles.plannerHeaderRow}>
+                  <Text style={styles.plannerTitle}>Route Planner</Text>
+                  <TouchableOpacity
+                    style={styles.closePlannerBtn}
+                    onPress={() => {
+                      setIsEditingRoute(false);
+                      setMapPickTarget(null);
+                    }}
+                  >
+                    <Text style={styles.closePlannerText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.inputsRow}>
+                  <View style={styles.inputsColumn}>
+                    <AddressInput
+                      placeholder="Origin address..."
+                      value={origin}
+                      onChangeText={(text) => {
+                        setOrigin(text);
+                        setOriginCoords(null);
+                      }}
+                      onSelectAddress={(item) => {
+                        if (item && item.lat != null && item.lon != null) {
+                          setOriginCoords({ lat: item.lat, lon: item.lon });
+                        } else {
+                          setOriginCoords(null);
+                        }
+                      }}
+                    />
+                    <AddressInput
+                      placeholder="Destination address..."
+                      value={destination}
+                      onChangeText={(text) => {
+                        setDestination(text);
+                        setDestCoords(null);
+                      }}
+                      onSelectAddress={(item) => {
+                        if (item && item.lat != null && item.lon != null) {
+                          setDestCoords({ lat: item.lat, lon: item.lon });
+                        } else {
+                          setDestCoords(null);
+                        }
+                      }}
+                    />
+                  </View>
+                  <TouchableOpacity style={styles.swapBtn} onPress={handleSwapAddresses}>
+                    <SwapIcon size={18} color={COLORS.inkPrimary} />
+                  </TouchableOpacity>
+                </View>
+
+                {/* TAP-ON-MAP SHORTCUT SELECTORS */}
+                <View style={styles.mapPickSelectorRow}>
+                  <Text style={styles.mapPickSelectorLabel}>Pick on map:</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.mapPickChip,
+                      mapPickTarget === 'origin' && styles.mapPickChipActive,
+                    ]}
+                    onPress={() =>
+                      setMapPickTarget(mapPickTarget === 'origin' ? null : 'origin')
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.mapPickChipText,
+                        mapPickTarget === 'origin' && styles.mapPickChipTextActive,
+                      ]}
+                    >
+                      Departure (A)
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.mapPickChip,
+                      mapPickTarget === 'destination' && styles.mapPickChipActive,
+                    ]}
+                    onPress={() =>
+                      setMapPickTarget(
+                        mapPickTarget === 'destination' ? null : 'destination'
+                      )
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.mapPickChipText,
+                        mapPickTarget === 'destination' && styles.mapPickChipTextActive,
+                      ]}
+                    >
+                      Arrival (B)
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* SLIDER SECTION INSIDE ROUTE PLANNER */}
+                <View style={styles.plannerSliderSection}>
+                  <View style={styles.sliderHeaderLine}>
+                    <Text style={styles.riskLabelSmall}>Pothole Avoidance Level:</Text>
+                    <Text style={styles.riskPercentLarge}>{riskPercentage}%</Text>
+                  </View>
+
+                  <Slider
+                    style={styles.sliderTrackControl}
+                    minimumValue={0}
+                    maximumValue={MAX_POTHOLE_CARE}
+                    step={1}
+                    value={potholeCare}
+                    onValueChange={setPotholeCare}
+                    minimumTrackTintColor={COLORS.terracotta}
+                    maximumTrackTintColor="#c7b396"
+                    thumbTintColor={COLORS.terracotta}
+                  />
+                  <View style={styles.sliderTickLabels}>
+                    <Text style={styles.sliderTickText}>Fastest</Text>
+                    <Text style={styles.sliderTickText}>Cautious</Text>
+                    <Text style={styles.sliderTickText}>Avoid All</Text>
+                  </View>
+                </View>
+
+                {error && (
+                  <View style={styles.errorBox}>
+                    <Text style={styles.errorText}>{error}</Text>
+                  </View>
+                )}
+
+                {/* FIND ROUTES BUTTON DIRECTLY NEAR THE SLIDER */}
+                <WoodButton
+                  onPress={handleFindRoutes}
+                  disabled={loading}
+                  style={styles.findRoutesBtn}
+                >
+                  {loading ? 'Finding Routes...' : 'Find Routes'}
+                </WoodButton>
+              </View>
+            )}
+          </View>
+        ) : (
+          /* TURN-BY-TURN NAVIGATION HUD */
+          <View style={styles.navigationHud}>
+            <View style={styles.navTurnIconCircle}>
+              <View style={styles.navTurnTriangle} />
+            </View>
+            <View style={styles.navInstructionBlock}>
+              {nextTurnDistance !== null && (
+                <Text style={styles.navDistanceText}>{nextTurnDistance} meters</Text>
+              )}
+              <Text style={styles.navInstructionText} numberOfLines={2}>
+                {currentInstruction}
+              </Text>
+            </View>
+          </View>
+        )
+        }
+
+        {/* MAP PICK ACTIVE FLOATING BANNER */}
+        {
+          mapPickTarget && !navigating && (
+            <View
+              style={[
+                styles.mapPickFloatingBanner,
+                { top: topSectionHeight + 12 },
+              ]}
+            >
+              <CrosshairIcon size={14} color={COLORS.terracotta} />
+              <Text style={styles.mapPickFloatingBannerText}>
+                {mapPickTarget === 'origin'
+                  ? 'Tap map to set Departure (A)'
+                  : 'Tap map to set Arrival (B)'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setMapPickTarget(null)}
+                style={styles.mapPickCancelBtn}
+              >
+                <CloseIcon size={12} color={COLORS.inkMuted} />
+              </TouchableOpacity>
+            </View>
+          )
+        }
+
+        {/* FLOATING RECENTER CROSSHAIR BUTTON (POSITIONED RIGHT BELOW ROUTE PLANNER, NEVER OVERLAPPING) */}
+        {
+          !navigating && (
+            <View
+              style={[
+                styles.rightFloatingControls,
+                { top: topSectionHeight + 12 },
+              ]}
+            >
+              <TouchableOpacity
+                style={styles.recenterFab}
+                onPress={recenterMap}
+                accessibilityLabel="Recenter to your location or route"
+              >
+                <CrosshairIcon size={22} color={COLORS.terracotta} />
+              </TouchableOpacity>
+            </View>
+          )
+        }
+
+        {/* BOTTOM SECTION: ROUTE OPTIONS SELECTION -> START DRIVE */}
+        {
+          !navigating && result ? (
+            <View style={styles.bottomSection}>
+              <View style={styles.routesChoiceCard}>
+                <Text style={styles.routesChoiceHeader}>Select Route Option</Text>
+
+                {/* ROUTE CHOICES LIST (USER CAN CHOOSE ONE) */}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.routeChoicesScroll}
+                >
+                  {result.routes.map((route, i) => {
+                    const isSelected = i === selectedIndex;
+                    const durationMins = Math.max(1, Math.round(route.duration_s / 60));
+                    const km = (route.distance_m / 1000).toFixed(1);
+                    const hazardCount = route.potholes_encountered.length;
+
+                    return (
+                      <TouchableOpacity
+                        key={`route-opt-${route.label}-${i}`}
+                        style={[
+                          styles.routeOptionTile,
+                          isSelected && styles.routeOptionTileSelected,
+                        ]}
+                        onPress={() => setSelectedIndex(i)}
+                      >
+                        <View style={styles.tileHeader}>
+                          <Text
+                            style={[
+                              styles.tileLabel,
+                              isSelected && styles.tileLabelSelected,
+                            ]}
+                          >
+                            {{ 'Recommended': 'Best' }[route.label] || route.label}
+                          </Text>
+                          <View
+                            style={[
+                              styles.hazardBadge,
+                              hazardCount > 0 ? styles.hazardBadgeWarn : styles.hazardBadgeSafe,
+                            ]}
+                          >
+                            <Text style={styles.hazardBadgeText}>
+                              {hazardCount === 0 ? 'Clear' : `${hazardCount} Pothole${hazardCount > 1 ? 's' : ''}`}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <Text style={styles.tileDuration}>
+                          {durationMins} min
+                        </Text>
+                        <Text style={styles.tileDistance}>
+                          {km} km · {route.directions.length} turns
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                {/* SELECTED ROUTE DETAILS (MATCHING REFERENCE IMAGE) */}
+                <View style={styles.selectedRouteSummaryRow}>
+                  <View style={styles.cardCircleIcon}>
+                    <View style={styles.cardIconSpoke} />
+                    <Text style={styles.cardIconGlyph}>✿</Text>
+                  </View>
+                  <View style={styles.selectedSummaryTextCol}>
+                    <Text style={styles.summaryTitle}>
+                      {selectedRoute?.label}: {Math.max(1, Math.round((selectedRoute?.duration_s || 0) / 60))} min
+                      ({((selectedRoute?.distance_m || 0) / 1000).toFixed(1)} km)
+                    </Text>
+                    <Text style={styles.summarySub}>
+                      {selectedRoutePotholes.length === 0
+                        ? 'Smoothest Pavement · No Potholes Encountered'
+                        : `${selectedRoutePotholes.length} Pothole Hazard(s) on this path`}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* PURE DYNAMIC HONEY WOOD BUTTON: START DRIVE */}
+              <WoodButton onPress={startNavigation} style={styles.startDriveBtn}>
+                Start Drive
+              </WoodButton>
+            </View>
+          ) : (
+            navigating && (
+              <View style={styles.navActiveBottomBar}>
+                <View style={styles.navActiveSummary}>
+                  <Text style={styles.navActiveTime}>
+                    ETA {Math.max(1, Math.round((selectedRoute?.duration_s || 0) / 60))} min
+                  </Text>
+                  <Text style={styles.navActiveSub}>
+                    {((selectedRoute?.distance_m || 0) / 1000).toFixed(1)} km remaining
+                  </Text>
+                </View>
+                <WoodButton
+                  onPress={stopNavigation}
+                  variant="danger"
+                  small
+                  style={styles.stopNavButton}
+                >
+                  Stop
+                </WoodButton>
+              </View>
+            )
+          )
+        }
+      </SafeAreaView >
+    </View >
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b0f19' },
-  header: { padding: 16, paddingBottom: 8 },
-  title: { fontSize: 20, fontWeight: '700', color: '#00f2fe' },
-  subtitle: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
-  form: { paddingHorizontal: 16, gap: 8 },
-  sliderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
-  sliderLabel: { color: '#9ca3af', fontSize: 11, flex: 1 },
-  sliderValue: { color: '#ff2d55', fontSize: 11, fontWeight: '700' },
-  slider: { width: '100%', height: 32 },
-  sliderEndLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: -4, marginBottom: 8 },
-  sliderEndLabel: { color: '#6b7280', fontSize: 9 },
-  button: { backgroundColor: '#00f2fe', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 8 },
-  buttonText: { color: '#0b0f19', fontWeight: '700', fontSize: 13 },
-  errorBanner: { marginHorizontal: 16, backgroundColor: '#7f1d1d', borderRadius: 8, padding: 10, marginBottom: 8 },
-  errorText: { color: '#fecaca', fontSize: 12 },
-  navBanner: {
-    marginHorizontal: 16, backgroundColor: '#0284c7', borderRadius: 10, padding: 12, marginBottom: 8,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.parchmentBg,
   },
-  navBannerLabel: { color: '#bae6fd', fontSize: 9, fontWeight: '800', position: 'absolute', top: 4, left: 12 },
-  navBannerInstruction: { color: '#fff', fontWeight: '700', fontSize: 14, flex: 1, marginTop: 8 },
-  stopButton: { backgroundColor: '#7f1d1d', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
-  stopButtonText: { color: '#fecaca', fontWeight: '700', fontSize: 11 },
-  mapContainer: { height: 260, marginHorizontal: 16, borderRadius: 12, overflow: 'hidden' },
-  map: { flex: 1 },
-  results: { flex: 1, padding: 16 },
-  unmatchedText: { color: '#f0c674', fontSize: 11, marginBottom: 8 },
-  routeCard: {
-    backgroundColor: '#152b22', borderRadius: 8, padding: 12, marginBottom: 8,
-    borderLeftWidth: 3, borderWidth: 1, borderColor: '#214739',
+  safeOverlay: {
+    flex: 1,
+    justifyContent: 'space-between',
   },
-  routeCardSelected: { borderColor: '#00f2fe', backgroundColor: '#1a3a30' },
-  routeCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  routeLabel: { color: '#e6f4fe', fontWeight: '700', fontSize: 13 },
-  riskBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, borderWidth: 1 },
-  riskBadgeText: { fontSize: 9, fontWeight: '700' },
-  routeMeta: { color: '#9ca3af', fontSize: 11, marginBottom: 2 },
-  routePotholes: { color: '#9ca3af', fontSize: 11 },
-  navigateButton: { backgroundColor: '#059669', padding: 14, borderRadius: 8, alignItems: 'center', marginTop: 4, marginBottom: 20 },
-  navigateButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+  topSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+
+  // Pill Search Bar: "to [destination]" (matching reference image)
+  searchPillBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.parchmentSurface,
+    borderColor: COLORS.parchmentBorder,
+    borderWidth: 1.5,
+    borderRadius: 26,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  searchPillText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  editPillBtn: {
+    padding: 2,
+  },
+
+  // Route Planner Card
+  routePlannerCard: {
+    backgroundColor: COLORS.parchmentSurface,
+    borderColor: COLORS.parchmentBorderDark,
+    borderWidth: 1.5,
+    borderRadius: 18,
+    padding: 14,
+  },
+  plannerHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  plannerTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  closePlannerBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#ebd9b7',
+    borderWidth: 1,
+    borderColor: COLORS.parchmentBorder,
+    borderRadius: 12,
+  },
+  closePlannerText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.inkSecondary,
+    fontFamily: 'serif',
+  },
+  inputsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  inputsColumn: {
+    flex: 1,
+  },
+  swapBtn: {
+    width: 36,
+    height: 36,
+    marginLeft: 6,
+    backgroundColor: '#ebd9b7',
+    borderColor: COLORS.parchmentBorderDark,
+    borderWidth: 1.5,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Slider section inside Route Planner
+  plannerSliderSection: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#ebd9b7',
+  },
+  sliderHeaderLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 2,
+  },
+  riskLabelSmall: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.inkSecondary,
+    fontFamily: 'serif',
+  },
+  riskPercentLarge: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.terracotta,
+    fontFamily: 'serif',
+  },
+  sliderTrackControl: {
+    width: '100%',
+    height: 28,
+  },
+  sliderTickLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -2,
+    marginBottom: 4,
+  },
+  sliderTickText: {
+    fontSize: 9,
+    color: COLORS.inkMuted,
+    fontFamily: 'serif',
+  },
+  findRoutesBtn: {
+    marginTop: 8,
+    width: '100%',
+  },
+  errorBox: {
+    backgroundColor: '#f5dedb',
+    borderColor: COLORS.hazardCritical,
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 6,
+  },
+  errorText: {
+    fontSize: 11,
+    color: COLORS.hazardCritical,
+    fontFamily: 'serif',
+  },
+
+  // Map Pick Row & Chips inside Route Planner
+  mapPickSelectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#ebd9b7',
+  },
+  mapPickSelectorLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.inkSecondary,
+    fontFamily: 'serif',
+  },
+  mapPickChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#ebd9b7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.parchmentBorderDark,
+  },
+  mapPickChipActive: {
+    backgroundColor: COLORS.terracotta,
+    borderColor: COLORS.terracottaDark,
+  },
+  mapPickChipText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  mapPickChipTextActive: {
+    color: '#fff',
+  },
+
+  // Map Pick Floating Banner on Map
+  mapPickFloatingBanner: {
+    position: 'absolute',
+    left: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.parchmentSurface,
+    borderColor: COLORS.terracotta,
+    borderWidth: 1.5,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    zIndex: 25,
+  },
+  mapPickFloatingBannerText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  mapPickCancelBtn: {
+    padding: 2,
+    marginLeft: 4,
+  },
+
+  // Right floating controls (Recenter crosshair button, positioned right below route planner)
+  rightFloatingControls: {
+    position: 'absolute',
+    right: 18,
+    alignItems: 'center',
+    zIndex: 25,
+  },
+  recenterFab: {
+    top: 55,
+    left: -5,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.parchmentSurface,
+    borderColor: COLORS.parchmentBorder,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Bottom Section: Route Choices -> Start Drive
+  bottomSection: {
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    alignItems: 'center',
+  },
+  routesChoiceCard: {
+    width: '100%',
+    backgroundColor: COLORS.parchmentSurface,
+    borderColor: COLORS.parchmentBorder,
+    borderWidth: 1.5,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 10,
+  },
+  routesChoiceHeader: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+    marginBottom: 8,
+  },
+  routeChoicesScroll: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  routeOptionTile: {
+    width: 135,
+    backgroundColor: '#ebd9b7',
+    borderColor: COLORS.parchmentBorder,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    padding: 9,
+    marginRight: 8,
+  },
+  routeOptionTileSelected: {
+    backgroundColor: '#fffdf9',
+    borderColor: COLORS.terracotta,
+    borderWidth: 2,
+  },
+  tileHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  tileLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.inkSecondary,
+    fontFamily: 'serif',
+  },
+  tileLabelSelected: {
+    color: COLORS.terracotta,
+  },
+  hazardBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  hazardBadgeSafe: {
+    backgroundColor: COLORS.forestTint,
+  },
+  hazardBadgeWarn: {
+    backgroundColor: '#f5dedb',
+  },
+  hazardBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+  },
+  tileDuration: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  tileDistance: {
+    fontSize: 10,
+    color: COLORS.inkMuted,
+    fontFamily: 'serif',
+    marginTop: 2,
+  },
+
+  // Selected route summary row (matching reference image)
+  selectedRouteSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#ebd9b7',
+  },
+  cardCircleIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ebd9b7',
+    borderColor: COLORS.parchmentBorderDark,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  cardIconSpoke: {
+    position: 'absolute',
+    width: 2,
+    height: 32,
+    backgroundColor: 'rgba(60, 35, 15, 0.22)',
+  },
+  cardIconGlyph: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  selectedSummaryTextCol: {
+    flex: 1,
+  },
+  summaryTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  summarySub: {
+    fontSize: 10,
+    color: COLORS.inkSecondary,
+    fontFamily: 'serif',
+    marginTop: 1,
+  },
+
+  // Start Drive Pill Button
+  startDriveBtn: {
+    width: '70%',
+    alignSelf: 'center',
+  },
+
+  // Navigation HUD
+  navigationHud: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    backgroundColor: COLORS.forestDark,
+    borderColor: COLORS.parchmentBorderDark,
+    borderWidth: 2,
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navTurnIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.forestPine,
+    borderColor: COLORS.forestFern,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  navTurnTriangle: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderBottomWidth: 10,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: COLORS.parchmentCard,
+  },
+  navInstructionBlock: {
+    flex: 1,
+  },
+  navDistanceText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.forestTint,
+  },
+  navInstructionText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.parchmentCard,
+    fontFamily: 'serif',
+    marginTop: 2,
+  },
+  navActiveBottomBar: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: COLORS.parchmentSurface,
+    borderColor: COLORS.parchmentBorderDark,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    padding: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  navActiveSummary: {
+    flex: 1,
+  },
+  navActiveTime: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+  },
+  navActiveSub: {
+    fontSize: 11,
+    color: COLORS.inkSecondary,
+    fontFamily: 'serif',
+  },
+  stopNavButton: {
+    paddingHorizontal: 14,
+  },
+
+  // Markers
+  originMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: COLORS.forestPine,
+    borderWidth: 2,
+    borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  destMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: COLORS.terracotta,
+    borderWidth: 2,
+    borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  markerText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  userLocationMarker: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(59, 97, 56, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userLocationDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.forestPine,
+    borderWidth: 1.5,
+    borderColor: '#fff',
+  },
 });

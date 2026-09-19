@@ -127,23 +127,39 @@ def find_routes(
         results.append(_build_route_result(graph, label, nodes, edge_potholes))
 
     if len(results) < min_routes:
-        try:
-            # shortest_simple_paths (Yen's algorithm) doesn't support multigraphs;
-            # search over a simple-graph view (min travel_time per node pair) and
-            # build the actual RouteResult from the real multigraph via the
-            # resulting node sequence, which works on either graph type.
-            simple_graph = _simple_graph_view(graph)
-            path_generator = nx.shortest_simple_paths(simple_graph, origin_node, destination_node, weight="travel_time")
-            for nodes in path_generator:
-                node_sequence = tuple(nodes)
-                if node_sequence in seen_node_sequences:
-                    continue
-                seen_node_sequences.add(node_sequence)
-                results.append(_build_route_result(graph, f"Alternate {len(results) + 1}", nodes, edge_potholes))
-                if len(results) >= min_routes:
-                    break
-        except nx.NetworkXNoPath:
-            pass
+        # Avoid Yen's algorithm (nx.shortest_simple_paths) which causes massive 30-60s delays on large graphs.
+        # Instead, use fast iterative edge penalty routing (standard navigation approach):
+        current_weights = {}
+        for r in results:
+            for u, v in zip(r.nodes, r.nodes[1:]):
+                current_weights[(u, v)] = current_weights.get((u, v), 1.0) + 0.65
+
+        for _ in range(len(results), min_routes):
+            original_costs = {}
+            for (u, v), penalty in current_weights.items():
+                if graph.has_edge(u, v):
+                    for k, data in graph[u][v].items():
+                        if ROUTE_COST_ATTR in data:
+                            original_costs[(u, v, k)] = data[ROUTE_COST_ATTR]
+                            data[ROUTE_COST_ATTR] = original_costs[(u, v, k)] * penalty
+
+            try:
+                alt_nodes = nx.shortest_path(graph, origin_node, destination_node, weight=ROUTE_COST_ATTR)
+                alt_seq = tuple(alt_nodes)
+                if alt_seq not in seen_node_sequences:
+                    seen_node_sequences.add(alt_seq)
+                    results.append(_build_route_result(graph, f"Alternate {len(results) + 1}", alt_nodes, edge_potholes))
+                    for u, v in zip(alt_nodes, alt_nodes[1:]):
+                        current_weights[(u, v)] = current_weights.get((u, v), 1.0) + 0.65
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                pass
+            finally:
+                for (u, v, k), cost in original_costs.items():
+                    if graph.has_edge(u, v) and k in graph[u][v]:
+                        graph[u][v][k][ROUTE_COST_ATTR] = cost
+
+            if len(results) >= min_routes:
+                break
 
     results.sort(key=lambda r: r.duration_s)
     return {"routes": results, "unmatched_potholes": unmatched}

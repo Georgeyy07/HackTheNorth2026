@@ -91,18 +91,24 @@ def snap_potholes_to_edges(
     misapplied.
     """
     edges = list(graph.edges(keys=True))
+    nodes = graph.nodes
     edge_potholes: Dict[EdgeKey, List[PotholeReport]] = {}
     unmatched: List[PotholeReport] = []
+    # ~150m cutoff in degrees (~0.0016 deg) for fast spatial pruning
+    max_snap_deg = (config.max_snap_distance_m + 30.0) / 111000.0
 
     for pothole in potholes:
+        p_lat, p_lon = pothole.lat, pothole.lon
         best_edge = None
         best_distance = math.inf
         for u, v, key in edges:
-            d = _point_to_segment_distance_m(
-                pothole.lat, pothole.lon,
-                graph.nodes[u]["y"], graph.nodes[u]["x"],
-                graph.nodes[v]["y"], graph.nodes[v]["x"],
-            )
+            uy, ux = nodes[u]["y"], nodes[u]["x"]
+            vy, vx = nodes[v]["y"], nodes[v]["x"]
+            if p_lat < min(uy, vy) - max_snap_deg or p_lat > max(uy, vy) + max_snap_deg:
+                continue
+            if p_lon < min(ux, vx) - max_snap_deg or p_lon > max(ux, vx) + max_snap_deg:
+                continue
+            d = _point_to_segment_distance_m(p_lat, p_lon, uy, ux, vy, vx)
             if d < best_distance:
                 best_distance, best_edge = d, (u, v, key)
 

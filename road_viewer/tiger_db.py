@@ -159,6 +159,16 @@ def get_potholes(severity: Optional[str] = None) -> List[Dict[str, Any]]:
     return rows
 
 
+def _normalize_severity_val(sev):
+    if sev is None:
+        return None
+    try:
+        return float(sev)
+    except (ValueError, TypeError):
+        mapping = {"CRITICAL": 9.0, "HIGH": 7.5, "MEDIUM": 5.0, "LOW": 2.5}
+        return mapping.get(str(sev).upper(), 5.0)
+
+
 def add_pothole(
     latitude: float,
     longitude: float,
@@ -169,6 +179,7 @@ def add_pothole(
     cursor = conn.cursor()
     
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    sev_val = _normalize_severity_val(severity)
     
     if USE_POSTGRES:
         sql = """
@@ -176,7 +187,7 @@ def add_pothole(
         VALUES (%s, %s, %s, %s)
         RETURNING id;
         """
-        cursor.execute(sql, (latitude, longitude, severity, now_iso))
+        cursor.execute(sql, (latitude, longitude, sev_val, now_iso))
         new_id = cursor.fetchone()[0]
         conn.commit()
     else:
@@ -184,7 +195,7 @@ def add_pothole(
         INSERT INTO potholes (latitude, longitude, severity, timestamp)
         VALUES (?, ?, ?, ?);
         """
-        cursor.execute(sql, (latitude, longitude, severity, now_iso))
+        cursor.execute(sql, (latitude, longitude, sev_val, now_iso))
         new_id = cursor.lastrowid
         conn.commit()
         
@@ -216,7 +227,7 @@ def update_pothole(
     
     if severity is not None:
         set_clauses.append(f"severity = {placeholder}")
-        params.append(severity)
+        params.append(_normalize_severity_val(severity))
     if latitude is not None:
         set_clauses.append(f"latitude = {placeholder}")
         params.append(float(latitude))
