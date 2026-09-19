@@ -1,0 +1,9 @@
+# nothing rn realistically
+.git
+.env
+road_training/
+docs/
+node_modules/
+__pycache__/
+*.pyc
+reports/
