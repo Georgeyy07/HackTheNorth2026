@@ -4,6 +4,12 @@ Ordinal prediction is implemented and evaluated alongside the existing regressio
 
 The deployed regression ensemble and Kalman settings remain the production defaults. The new ordinal model is an experimental window model; its latent numeric score is not a calibrated IRI and cannot be passed to the existing IRI timeline wrapper as one.
 
+The four trained **ordinal + PVS** checkpoints (seeds 52–55) are now packaged in
+[`models/ordinal_pvs/`](../models/ordinal_pvs/README.md), with hashes, a portable
+loader, augmentation details, and recorded LiRA/Kaggle and preliminary MIT/UMass
+external metrics. MIT/UMass adds bad-road examples, subject to its sensor and
+profile-alignment limitations; the LiRA results below remain unchanged.
+
 ## Results
 
 These are four-member ensembles, seeds 52–55. Each fine-tuned checkpoint was selected on VAL before this study's TEST evaluation. The primary metric averages patch predictions within each traversal, then equally across traversals of a physical 100-m section, giving each physical section one vote. It is offline repeated-traversal performance, not a claim of equivalent single-pass or live patch accuracy.

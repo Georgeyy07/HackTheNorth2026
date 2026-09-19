@@ -10,6 +10,7 @@ Use **acceleration X/Y/Z + speed**. The current model keeps per-window instance 
 - [Default postprocessing settings](../configs/timeline.json)
 - [Training guide](../docs/TRAINING.md)
 - [Experimental ordinal roughness model, PVS importer and controlled results](../docs/ORDINAL.md)
+- [Trained ordinal + PVS ensemble: four weights and inference example](../models/ordinal_pvs/README.md)
 - [Full-drive inference export with timestamps and GPS](export_test_drives.py)
 
 Run from the repository root:

@@ -21,6 +21,7 @@ The current deployed model is a four-member, instance-normalized, bidirectional 
 | `road_viewer/` | FastAPI + Leaflet replay, plots, controls, and browser tests |
 | `configs/timeline.json` | Frozen consensus + fixed Kalman settings, reused without TEST tuning |
 | `models/acceleration_speed/` | Four trained, inference-only checkpoints, checksums, and model card |
+| `models/ordinal_pvs/` | Four ordinal good/medium/bad + disturbance checkpoints, portable loader example and metrics |
 | `docs/` | Data contract, training guide, migration notes, and historical research notes |
 
 ## Install
@@ -38,7 +39,7 @@ For only the dataset/models, `pip install -e .` needs NumPy and PyTorch. The ful
 
 ## Use a prepared dataset
 
-Datasets, training checkpoints, generated replay exports, and experiment results are external artifacts and are excluded from Git. The four small inference-only checkpoints in `models/acceleration_speed/` are included. Supply an existing prepared corpus with `manifest.json` and its record folders. See [the data contract](docs/DATA.md) for structure, labels, orientation, and preparation prerequisites.
+Datasets, training checkpoints, generated replay exports, and experiment results are external artifacts and are excluded from Git. The small inference-only ensembles in `models/acceleration_speed/` and `models/ordinal_pvs/` are included. Supply an existing prepared corpus with `manifest.json` and its record folders. See [the data contract](docs/DATA.md) for structure, labels, orientation, and preparation prerequisites.
 
 ```python
 from torch.utils.data import DataLoader
@@ -58,6 +59,8 @@ output = model(batch['x'], batch['mask'])
 Use [the training guide](docs/TRAINING.md) to find the current augmented recipe, the older supervised baselines, and DropPatch/ArcTan/RCD pretraining. The old generic trainer uses TRAIN statistics; the current ensemble recipe uses per-window instance normalization. These are explicitly different experiment configurations.
 
 The [ordinal roughness experiment](docs/ORDINAL.md) adds a good/medium/bad model and a PVS importer, with paired regression comparisons and four-seed results. It preserves the current deployment while evaluating the limits of physical IRI labels and weak PVS labels.
+
+The completed [ordinal + PVS ensemble](models/ordinal_pvs/README.md) is also included as four portable checkpoints. Load it with `road_training.ordinal_checkpoints.load_ordinal_ensemble` for patch-level class probabilities and disturbance probabilities. Its output is ordinal quality, not calibrated numeric IRI; the IRI replay interface below uses the regression ensemble.
 
 ## Load weights and replay predictions
 

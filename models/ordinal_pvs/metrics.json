@@ -1,0 +1,396 @@
+{
+  "lira_kaggle": {
+    "val": {
+      "sections": {
+        "confusion": [
+          [
+            173,
+            33,
+            0
+          ],
+          [
+            11,
+            39,
+            2
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "support": [
+          206,
+          52,
+          0
+        ],
+        "accuracy": 0.8217054263565892,
+        "macro_f1_present": 0.7581058726220016,
+        "macro_f1_all_three": 0.5054039150813344,
+        "balanced_accuracy_present": 0.7949029126213591,
+        "mean_absolute_class_error": 0.17829457364341086,
+        "severe_error_fraction": 0.0,
+        "per_class": {
+          "good": {
+            "precision": 0.9402173913043478,
+            "recall": 0.8398058252427184,
+            "f1": 0.8871794871794871,
+            "support": 206
+          },
+          "medium": {
+            "precision": 0.5416666666666666,
+            "recall": 0.75,
+            "f1": 0.6290322580645161,
+            "support": 52
+          },
+          "bad": {
+            "precision": 0.0,
+            "recall": null,
+            "f1": null,
+            "support": 0
+          }
+        },
+        "sections": 258
+      },
+      "patches": {
+        "confusion": [
+          [
+            45096,
+            14158,
+            579
+          ],
+          [
+            4518,
+            10027,
+            1955
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "support": [
+          59833,
+          16500,
+          0
+        ],
+        "accuracy": 0.7221385246223783,
+        "macro_f1_present": 0.6584895161761631,
+        "macro_f1_all_three": 0.43899301078410874,
+        "balanced_accuracy_present": 0.6806973809426136,
+        "mean_absolute_class_error": 0.2854466613391325,
+        "severe_error_fraction": 0.007585185961510749,
+        "per_class": {
+          "good": {
+            "precision": 0.9089369935905188,
+            "recall": 0.7536977921882573,
+            "f1": 0.824070097855583,
+            "support": 59833
+          },
+          "medium": {
+            "precision": 0.41459582385776306,
+            "recall": 0.6076969696969697,
+            "f1": 0.4929089344967433,
+            "support": 16500
+          },
+          "bad": {
+            "precision": 0.0,
+            "recall": null,
+            "f1": null,
+            "support": 0
+          }
+        }
+      },
+      "disturbance": {
+        "confusion": [
+          [
+            2452,
+            284
+          ],
+          [
+            74,
+            437
+          ]
+        ],
+        "precision": 0.6061026352288488,
+        "recall": 0.8551859099804305,
+        "f1": 0.7094155844155844
+      }
+    },
+    "test": {
+      "sections": {
+        "confusion": [
+          [
+            100,
+            5,
+            0
+          ],
+          [
+            5,
+            9,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "support": [
+          105,
+          14,
+          0
+        ],
+        "accuracy": 0.9159663865546218,
+        "macro_f1_present": 0.7976190476190477,
+        "macro_f1_all_three": 0.5317460317460317,
+        "balanced_accuracy_present": 0.7976190476190477,
+        "mean_absolute_class_error": 0.08403361344537816,
+        "severe_error_fraction": 0.0,
+        "per_class": {
+          "good": {
+            "precision": 0.9523809523809523,
+            "recall": 0.9523809523809523,
+            "f1": 0.9523809523809523,
+            "support": 105
+          },
+          "medium": {
+            "precision": 0.6428571428571429,
+            "recall": 0.6428571428571429,
+            "f1": 0.6428571428571429,
+            "support": 14
+          },
+          "bad": {
+            "precision": 0.0,
+            "recall": null,
+            "f1": null,
+            "support": 0
+          }
+        },
+        "sections": 119
+      },
+      "patches": {
+        "confusion": [
+          [
+            14865,
+            3143,
+            31
+          ],
+          [
+            705,
+            1635,
+            85
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "support": [
+          18039,
+          2425,
+          0
+        ],
+        "accuracy": 0.8062939796716184,
+        "macro_f1_present": 0.6692809978347042,
+        "macro_f1_all_three": 0.4461873318898028,
+        "balanced_accuracy_present": 0.7491373501742788,
+        "mean_absolute_class_error": 0.19522087568412821,
+        "severe_error_fraction": 0.0015148553557466772,
+        "per_class": {
+          "good": {
+            "precision": 0.9547206165703276,
+            "recall": 0.8240478962248462,
+            "f1": 0.884584486298313,
+            "support": 18039
+          },
+          "medium": {
+            "precision": 0.34219338635412305,
+            "recall": 0.6742268041237114,
+            "f1": 0.4539775093710954,
+            "support": 2425
+          },
+          "bad": {
+            "precision": 0.0,
+            "recall": null,
+            "f1": null,
+            "support": 0
+          }
+        }
+      },
+      "disturbance": {
+        "confusion": [
+          [
+            2909,
+            182
+          ],
+          [
+            11,
+            222
+          ]
+        ],
+        "precision": 0.5495049504950495,
+        "recall": 0.9527896995708155,
+        "f1": 0.6970172684458399
+      }
+    }
+  },
+  "mit_umass": {
+    "physical_sections": {
+      "confusion": [
+        [
+          190,
+          22,
+          1
+        ],
+        [
+          3,
+          39,
+          32
+        ],
+        [
+          0,
+          7,
+          196
+        ]
+      ],
+      "support": [
+        213,
+        74,
+        203
+      ],
+      "accuracy": 0.8673469387755102,
+      "macro_f1_present": 0.7975545910627666,
+      "macro_f1_all_three": 0.7975545910627666,
+      "balanced_accuracy_present": 0.7948543492496868,
+      "mean_absolute_class_error": 0.1346938775510204,
+      "severe_error_fraction": 0.0020408163265306124,
+      "per_class": {
+        "good": {
+          "precision": 0.9844559585492227,
+          "recall": 0.892018779342723,
+          "f1": 0.9359605911330049,
+          "support": 213
+        },
+        "medium": {
+          "precision": 0.5735294117647058,
+          "recall": 0.527027027027027,
+          "f1": 0.5492957746478874,
+          "support": 74
+        },
+        "bad": {
+          "precision": 0.8558951965065502,
+          "recall": 0.9655172413793104,
+          "f1": 0.9074074074074074,
+          "support": 203
+        }
+      },
+      "count": 490
+    },
+    "individual_traversals": {
+      "confusion": [
+        [
+          1496,
+          160,
+          15
+        ],
+        [
+          61,
+          199,
+          183
+        ],
+        [
+          11,
+          100,
+          1053
+        ]
+      ],
+      "support": [
+        1671,
+        443,
+        1164
+      ],
+      "accuracy": 0.8383160463697377,
+      "macro_f1_present": 0.7456777567439742,
+      "macro_f1_all_three": 0.7456777567439742,
+      "balanced_accuracy_present": 0.7497071331927786,
+      "mean_absolute_class_error": 0.1696156192800488,
+      "severe_error_fraction": 0.007931665649786455,
+      "per_class": {
+        "good": {
+          "precision": 0.9540816326530612,
+          "recall": 0.8952722920406941,
+          "f1": 0.9237418956468045,
+          "support": 1671
+        },
+        "medium": {
+          "precision": 0.4335511982570806,
+          "recall": 0.4492099322799097,
+          "f1": 0.44124168514412415,
+          "support": 443
+        },
+        "bad": {
+          "precision": 0.841726618705036,
+          "recall": 0.904639175257732,
+          "f1": 0.8720496894409938,
+          "support": 1164
+        }
+      },
+      "count": 3278,
+      "patch_metrics": {
+        "confusion": [
+          [
+            37617,
+            6164,
+            1004
+          ],
+          [
+            2865,
+            9285,
+            11204
+          ],
+          [
+            800,
+            6959,
+            68390
+          ]
+        ],
+        "support": [
+          44785,
+          23354,
+          76149
+        ],
+        "accuracy": 0.7990408072743402,
+        "macro_f1_present": 0.7175148420037396,
+        "macro_f1_all_three": 0.7175148420037396,
+        "balanced_accuracy_present": 0.7118768334291165,
+        "mean_absolute_class_error": 0.21346196495897093,
+        "severe_error_fraction": 0.012502772233311156,
+        "per_class": {
+          "good": {
+            "precision": 0.9112203866091759,
+            "recall": 0.8399464106285587,
+            "f1": 0.8741329429398027,
+            "support": 44785
+          },
+          "medium": {
+            "precision": 0.4143609425205284,
+            "recall": 0.39757643230281753,
+            "f1": 0.40579520125868623,
+            "support": 23354
+          },
+          "bad": {
+            "precision": 0.848532221643217,
+            "recall": 0.8981076573559732,
+            "f1": 0.87261638181273,
+            "support": 76149
+          }
+        }
+      },
+      "scope": "Post-hoc descriptive diagnostic; settings are label/prediction-independent. GPS traversal IDs are inferred, not original metadata."
+    }
+  },
+  "scope": "Historical frozen evaluations, not new deployment testing; LiRA held-outs lack bad roads; MIT original XYZ with known artifacts and provisional urban profile alignment; no Kalman"
+}

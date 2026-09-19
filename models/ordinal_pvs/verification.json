@@ -1,0 +1,36 @@
+{
+  "all_source_tensors_exact": true,
+  "unit_tests_passed": 16,
+  "unit_test_files": [
+    "test_ordinal_checkpoints.py",
+    "test_ordinal.py",
+    "test_checkpoints.py"
+  ],
+  "inference_parity": {
+    "cpu": {
+      "dtype": "FP32",
+      "batch_sources": [
+        "kaggle",
+        "lira",
+        "roadsens",
+        "pvs"
+      ],
+      "quality_probability_max_difference": 0.0,
+      "disturbance_probability_max_difference": 0.0,
+      "parameters_per_member": 741772
+    },
+    "cuda": {
+      "dtype": "BF16 autocast",
+      "batch_sources": [
+        "kaggle",
+        "lira",
+        "roadsens",
+        "pvs"
+      ],
+      "quality_probability_max_difference": 0.0,
+      "disturbance_probability_max_difference": 0.0,
+      "parameters_per_member": 741772
+    }
+  },
+  "scope": "Packaging and loader correctness on one TRAIN window per source, not a new accuracy evaluation"
+}
