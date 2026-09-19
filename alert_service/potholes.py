@@ -1,22 +1,30 @@
 """Nearby-pothole lookups for the alert service.
 
-George's TigerDB schema isn't built yet. PostgresPotholeStore assumes a
-`potholes` table with (id, lat, lon, severity) columns, reached over the
-standard Postgres wire protocol -- TigerDB is Postgres-compatible. When the
-real schema lands, only the SQL in `query_nearby` needs to change; everything
-that calls PotholeStore stays the same.
+TigerDBPotholeStore wraps Armaan's `road_viewer.tiger_db` module (see that
+file for the real schema: a `potholes` table with latitude/longitude columns
+and a string severity enum, backed by TigerDB/Postgres with a local SQLite
+fallback). That module is synchronous psycopg2/sqlite3, so calls run in a
+thread via `asyncio.to_thread` to keep this store's async interface. It has
+no lat/lon radius filtering built in, so `query_nearby` fetches everything
+and filters with `haversine_distance_m` -- fine at hackathon data volumes;
+revisit if the potholes table grows large enough to need a DB-side filter.
 """
 
 from __future__ import annotations
 
-import math
+import asyncio
 from typing import Iterable, List
 
 from .alert_math import PotholeReport, haversine_distance_m
 
-# ~1 degree of latitude is ~111.32km; used to turn a meter radius into a cheap
-# bounding-box pre-filter before TigerDB has PostGIS-style distance queries.
-METERS_PER_DEGREE_LAT = 111_320.0
+# tiger_db stores severity as a string enum, not the 0-1 float PotholeReport
+# expects; this is our own choice of mapping, not part of the DB contract.
+SEVERITY_TO_SCORE = {
+    "LOW": 0.25,
+    "MEDIUM": 0.5,
+    "HIGH": 0.75,
+    "CRITICAL": 1.0,
+}
 
 
 class PotholeStore:
@@ -37,40 +45,20 @@ class InMemoryPotholeStore(PotholeStore):
         ]
 
 
-class PostgresPotholeStore(PotholeStore):
-    """Queries TigerDB over asyncpg. Requires the `asyncpg` package."""
-
-    def __init__(self, pool) -> None:
-        self._pool = pool  # asyncpg.Pool
-
-    @classmethod
-    async def connect(cls, dsn: str) -> "PostgresPotholeStore":
-        import asyncpg
-
-        pool = await asyncpg.create_pool(dsn)
-        return cls(pool)
+class TigerDBPotholeStore(PotholeStore):
+    """Queries potholes via road_viewer.tiger_db, filtering by radius in Python."""
 
     async def query_nearby(self, lat: float, lon: float, radius_m: float) -> List[PotholeReport]:
-        lat_delta = radius_m / METERS_PER_DEGREE_LAT
-        meters_per_degree_lon = METERS_PER_DEGREE_LAT * max(0.1, math.cos(math.radians(lat)))
-        lon_delta = radius_m / meters_per_degree_lon
+        from road_viewer.tiger_db import get_potholes
 
-        rows = await self._pool.fetch(
-            """
-            SELECT id, lat, lon, severity
-            FROM potholes
-            WHERE lat BETWEEN $1 AND $2
-              AND lon BETWEEN $3 AND $4
-            """,
-            lat - lat_delta,
-            lat + lat_delta,
-            lon - lon_delta,
-            lon + lon_delta,
-        )
-        candidates = [
-            PotholeReport(id=str(r["id"]), lat=r["lat"], lon=r["lon"], severity=r["severity"])
-            for r in rows
+        rows = await asyncio.to_thread(get_potholes)
+        potholes = [
+            PotholeReport(
+                id=str(row["id"]),
+                lat=row["latitude"],
+                lon=row["longitude"],
+                severity=SEVERITY_TO_SCORE.get(row.get("severity", "MEDIUM"), 0.5),
+            )
+            for row in rows
         ]
-        # The bounding box over-selects near the box corners; trim with the
-        # real great-circle distance so `max_alert_distance_m` is exact.
-        return [p for p in candidates if haversine_distance_m(lat, lon, p.lat, p.lon) <= radius_m]
+        return [p for p in potholes if haversine_distance_m(lat, lon, p.lat, p.lon) <= radius_m]
