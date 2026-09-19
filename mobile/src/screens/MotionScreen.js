@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
@@ -36,6 +36,22 @@ export default function MotionScreen() {
     setTimeout(() => finish(false), timeoutMs);
   });
 
+  // Runs on every stop path (button, app-backgrounded, screen-unmounted), not
+  // just the explicit Stop button, so a backgrounded clip is never orphaned
+  // in cache while its JSONL session still gets closed and saved normally.
+  useEffect(() => {
+    recorder.onStopRef.current = () => {
+      const clip = filming.current;
+      filming.current = null;
+      if (!clip) return;
+      cameraRef.current?.stopRecording();
+      clip.pending
+        .then(({ uri }) => saveRecordingVideo(clip.tag, uri))
+        .then(() => recorder.refresh())
+        .catch((err) => Alert.alert('Demo video', `Recording saved without its video: ${err.message}`));
+    };
+  }, [recorder]);
+
   const start = async () => {
     try {
       if (angles.some((a) => !a.trim())) throw new Error('Enter all three correction angles.');
@@ -50,21 +66,6 @@ export default function MotionScreen() {
         filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
       }
     } catch (err) { Alert.alert('Mount settings', err.message); }
-  };
-
-  const stop = async () => {
-    const clip = filming.current;
-    filming.current = null;
-    let video = null;
-    if (clip) {
-      try {
-        cameraRef.current?.stopRecording();
-        const { uri } = await clip.pending;
-        video = saveRecordingVideo(clip.tag, uri);
-      } catch (err) { Alert.alert('Demo video', `Recording saved without its video: ${err.message}`); }
-    }
-    recorder.stop();
-    if (video) recorder.refresh();
   };
 
   const share = async (file) => {
@@ -104,7 +105,7 @@ export default function MotionScreen() {
         <Button disabled={!sample?.canCalibrate || recorder.status !== 'recording'} onPress={recorder.calibrate}>Calibrate parked tilt</Button>
       </View>
       {recorder.error && <Text accessibilityRole="alert" style={styles.error}>{recorder.error}</Text>}
-      <Button onPress={active ? stop : start}>{active ? 'Stop and save recording' : 'Start recording'}</Button>
+      <Button onPress={active ? () => recorder.stop() : start}>{active ? 'Stop and save recording' : 'Start recording'}</Button>
       <Text style={styles.description}>{recorder.status === 'starting' ? 'Starting sensors and GPS…' : active
         ? 'Recording to device storage · stops and saves if the app goes to the background.'
         : 'Sessions are saved locally. Export a session below to share all raw and stabilized samples.'}</Text>

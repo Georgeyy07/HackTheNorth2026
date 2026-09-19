@@ -14,6 +14,7 @@ export function useMotionRecorder() {
   const current = useRef(null);
   const generation = useRef(0);
   const mounted = useRef(true);
+  const onStopRef = useRef(null);
 
   const refresh = useCallback(() => {
     if (!mounted.current) return;
@@ -27,6 +28,10 @@ export function useMotionRecorder() {
     if (active) {
       active.subscriptions.forEach((s) => s.remove());
       clearInterval(active.timer);
+      // Runs synchronously, before any state-driven unmount, so a camera ref
+      // set up by the caller is still valid regardless of what triggered stop
+      // (button press, app backgrounding, or screen unmount).
+      onStopRef.current?.(reason);
       try { active.session.close(reason); } catch (err) {
         if (mounted.current) setError(`Recording write failed: ${err.message}`);
       }
@@ -129,5 +134,5 @@ export function useMotionRecorder() {
     }
   }, [stop]);
 
-  return { status, error, live, recordings, start, stop, calibrate, refresh };
+  return { status, error, live, recordings, start, stop, calibrate, refresh, onStopRef };
 }
