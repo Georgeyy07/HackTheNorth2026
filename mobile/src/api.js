@@ -30,7 +30,13 @@ async function request(path, options = {}, timeoutMs = 15000) {
     }
     return await res.json();
   } catch (err) {
-    if (err.name === 'AbortError') {
+    // Expo's native fetch (iOS via ExpoNativeResponse) doesn't throw a
+    // standard DOM AbortError -- it throws its own error whose message says
+    // "fetch request has been canceled". Check the signal itself rather
+    // than relying on err.name/err.message shape, since that differs by
+    // platform (confirmed: iOS surfaced the raw native message instead of
+    // the friendly one here before this fix).
+    if (controller.signal.aborted) {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s -- check your connection or try a closer address.`);
     }
     throw err;

@@ -13,8 +13,20 @@ equally efficient.
 from __future__ import annotations
 
 import math
+import socket
 from pathlib import Path
 from typing import List, TypedDict
+
+import urllib3.util.connection as _urllib3_connection
+
+# This environment's outbound IPv6 is broken/blackholed: DNS returns IPv6
+# addresses first for hosts like overpass-api.de, and urllib3 (used by both
+# `requests` and osmnx) tries those first, hanging the full connect timeout
+# on each before ever reaching the working IPv4 address -- confirmed
+# directly, a routing request that should take ~15s took 100+ seconds this
+# way. Forcing IPv4-only resolution process-wide fixes it for every HTTP
+# call in this module (Overpass, Nominatim, Photon alike).
+_urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 import osmnx as ox
 import requests
@@ -35,6 +47,37 @@ MAX_ROUTE_DISTANCE_M = 100_000.0  # 100km -- generous for a single city/region t
 # Fail fast rather than hanging on a slow/overloaded Overpass mirror.
 ox.settings.requests_timeout = 30
 
+# The default public Overpass instance is a shared, rate-limited resource
+# that intermittently times out on the actual query endpoint even while
+# responding fine on /api/status (observed directly: overpass-api.de's
+# /api/status answered in ~1s while /api/interpreter connect-timed-out three
+# times in a row, ~100s total). Fall back to other public mirrors rather
+# than failing outright when that happens.
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api",
+    "https://overpass.kumi.systems/api",
+    "https://lz4.overpass-api.de/api",
+]
+
+
+def _download_graph_with_mirror_fallback(download_fn, attempts_per_mirror: int = 2):
+    """Some connection failures are transient (a specific backend IP behind a
+    round-robin DNS entry being down, rather than the whole mirror) --
+    confirmed directly: curl succeeded against overpass-api.de within the
+    same few seconds a Python retry against it failed. A couple of quick
+    retries per mirror costs little and catches these without needing a
+    fully custom connection-pooling/retry setup around osmnx's internal
+    request call."""
+    last_error = None
+    for mirror in OVERPASS_MIRRORS:
+        ox.settings.overpass_url = mirror
+        for _ in range(attempts_per_mirror):
+            try:
+                return download_fn()
+            except Exception as exc:  # noqa: BLE001 -- osmnx wraps several distinct network errors
+                last_error = exc
+    raise RuntimeError(f"All Overpass mirrors failed; last error: {last_error}") from last_error
+
 
 def _ensure_travel_times(graph):
     if not any("travel_time" in data for _, _, data in graph.edges(data=True)):
@@ -54,7 +97,7 @@ def load_road_graph(place: str, cache_dir: Path = DEFAULT_CACHE_DIR):
         graph = ox.load_graphml(cache_path)
         had_travel_times = any("travel_time" in data for _, _, data in graph.edges(data=True))
     else:
-        graph = ox.graph_from_place(place, network_type="drive")
+        graph = _download_graph_with_mirror_fallback(lambda: ox.graph_from_place(place, network_type="drive"))
         had_travel_times = False
 
     graph = _ensure_travel_times(graph)
@@ -101,7 +144,7 @@ def load_road_graph_for_route(
         graph = ox.load_graphml(cache_path)
         had_travel_times = any("travel_time" in data for _, _, data in graph.edges(data=True))
     else:
-        graph = ox.graph_from_bbox(bbox, network_type="drive")
+        graph = _download_graph_with_mirror_fallback(lambda: ox.graph_from_bbox(bbox, network_type="drive"))
         had_travel_times = False
 
     graph = _ensure_travel_times(graph)
