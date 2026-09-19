@@ -6,6 +6,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import PotholesScreen from './src/screens/PotholesScreen';
 import RouteFinderScreen from './src/screens/RouteFinderScreen';
 import { COLORS } from './src/theme';
+import MotionScreen from './src/screens/MotionScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -45,16 +46,9 @@ export default function App() {
           tabBarInactiveTintColor: COLORS.inkMuted,
         }}
       >
-        <Tab.Screen
-          name="RouteFinder"
-          component={RouteFinderScreen}
-          options={{ title: 'Route Map' }}
-        />
-        <Tab.Screen
-          name="Potholes"
-          component={PotholesScreen}
-          options={{ title: 'Potholes' }}
-        />
+        <Tab.Screen name="Potholes" component={PotholesScreen} options={{ title: 'Potholes' }} />
+        <Tab.Screen name="RouteFinder" component={RouteFinderScreen} options={{ title: 'Route Finder' }} />
+        <Tab.Screen name="Motion" component={MotionScreen} options={{ title: 'Motion' }} />
       </Tab.Navigator>
     </NavigationContainer>
   );

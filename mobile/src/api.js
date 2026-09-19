@@ -19,13 +19,30 @@ function resolveApiBaseUrl() {
 
 export const API_BASE_URL = resolveApiBaseUrl();
 
-async function request(path, options) {
-  const res = await fetch(`${API_BASE_URL}${path}`, options);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed (${res.status})`);
+async function request(path, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, { ...options, signal: controller.signal });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (${res.status})`);
+    }
+    return await res.json();
+  } catch (err) {
+    // Expo's native fetch (iOS via ExpoNativeResponse) doesn't throw a
+    // standard DOM AbortError -- it throws its own error whose message says
+    // "fetch request has been canceled". Check the signal itself rather
+    // than relying on err.name/err.message shape, since that differs by
+    // platform (confirmed: iOS surfaced the raw native message instead of
+    // the friendly one here before this fix).
+    if (controller.signal.aborted) {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s -- check your connection or try a closer address.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res.json();
 }
 
 export function getPotholes(severity) {
@@ -69,5 +86,5 @@ export function getRoute(origin, destination, avoidanceWeight, originCoords = nu
 
 export function suggestAddresses(query) {
   const params = new URLSearchParams({ q: query });
-  return request(`/api/geocode/suggest?${params.toString()}`);
+  return request(`/api/geocode/suggest?${params.toString()}`, {}, 8000);
 }
