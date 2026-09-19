@@ -18,10 +18,11 @@ def build_diamond_graph():
     for node, (lat, lon) in coords.items():
         g.add_node(node, y=lat, x=lon)
 
-    g.add_edge("A", "B", key=0, length=200.0)
-    g.add_edge("B", "D", key=0, length=200.0)
-    g.add_edge("A", "C", key=0, length=350.0)
-    g.add_edge("C", "D", key=0, length=350.0)
+    # Uniform 10 m/s (~36 km/h) assumed speed, so travel_time is just length/10.
+    g.add_edge("A", "B", key=0, length=200.0, travel_time=20.0)
+    g.add_edge("B", "D", key=0, length=200.0, travel_time=20.0)
+    g.add_edge("A", "C", key=0, length=350.0, travel_time=35.0)
+    g.add_edge("C", "D", key=0, length=350.0, travel_time=35.0)
     return g
 
 
@@ -38,7 +39,7 @@ def test_zero_avoidance_weight_matches_pure_shortest_path():
 def test_strong_avoidance_takes_the_longer_pothole_free_route():
     graph = build_diamond_graph()
     pothole_at_b = PotholeReport(id="p1", lat=43.4700, lon=-80.5430, severity=1.0)
-    config = RoutingConfig(avoidance_weight=5.0, penalty_per_severity_m=1000.0)
+    config = RoutingConfig(avoidance_weight=5.0, penalty_per_severity_s=1000.0)
 
     routes = find_route(graph, "A", "D", [pothole_at_b], config)
 
@@ -51,12 +52,12 @@ def test_strong_avoidance_takes_the_longer_pothole_free_route():
 def test_mild_avoidance_still_prefers_the_short_route_for_a_minor_pothole():
     graph = build_diamond_graph()
     minor_pothole = PotholeReport(id="p1", lat=43.4700, lon=-80.5430, severity=0.1)
-    config = RoutingConfig(avoidance_weight=0.5, penalty_per_severity_m=500.0)
+    config = RoutingConfig(avoidance_weight=0.5, penalty_per_severity_s=500.0)
 
     routes = find_route(graph, "A", "D", [minor_pothole], config)
 
-    # penalty here (~25m equivalent) is far smaller than the 300m detour cost,
-    # so a low-severity pothole shouldn't be worth the long way around
+    # penalty here (0.5*500*0.1=25s) is smaller than the 30s extra the detour
+    # costs (70s vs 40s), so a low-severity pothole isn't worth going around
     assert routes["pothole_aware"].nodes == ["A", "B", "D"]
 
 

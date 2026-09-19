@@ -1,4 +1,4 @@
-"""Turns raw pothole reports into a routing cost that trades off against distance.
+"""Turns raw pothole reports into a routing cost that trades off against real travel time.
 
 Real phone GPS is noisy: a pothole report can land 100+ meters from any real
 road (confirmed against the real Waterloo graph -- a real reported pothole
@@ -10,11 +10,13 @@ too loose). Instead, each pothole is snapped to its single nearest road edge
 farther than `max_snap_distance_m`, the report is treated as unmatched
 (probably a bad GPS fix) rather than silently misapplied to the wrong road.
 
-The graph (from osmnx) has nodes with lat/lon ('y'/'x') and edges with a
-'length' in meters. Snapped exposure is scaled by `penalty_per_severity_m`
-(an equivalent "extra meters" cost per severity unit) and dialed up or down
-with `avoidance_weight` -- 0 ignores potholes entirely (pure shortest path),
-1 applies the full penalty, and values above 1 push harder toward avoidance.
+"Efficiency" is measured in real travel time (`travel_time`, seconds -- see
+graph.py, which imputes it from OSM's maxspeed tags), not raw distance, so a
+highway edge and an equally-long residential edge aren't treated as equally
+efficient. Snapped exposure is scaled by `penalty_per_severity_s` (an
+equivalent "extra seconds" cost per severity unit) and dialed up or down with
+`avoidance_weight` -- 0 ignores potholes entirely (pure fastest-route), 1
+applies the full penalty, and values above 1 push harder toward avoidance.
 
 This still approximates each edge as a straight line rather than using OSM's
 true polyline geometry (the 'geometry' attribute, when present) -- fine for
@@ -36,8 +38,8 @@ EdgeKey = Tuple[object, object, object]
 @dataclass
 class RoutingConfig:
     max_snap_distance_m: float = 150.0     # beyond this, a pothole is "unmatched" to any road
-    penalty_per_severity_m: float = 500.0  # "extra meters" added per unit severity, before avoidance_weight
-    avoidance_weight: float = 0.5          # 0 = pure shortest path, 1 = full penalty, >1 = stronger avoidance
+    penalty_per_severity_s: float = 30.0   # "extra seconds" added per unit severity, before avoidance_weight
+    avoidance_weight: float = 0.5          # 0 = pure fastest route, 1 = full penalty, >1 = stronger avoidance
 
 
 def _to_local_meters(lat: float, lon: float, ref_lat_deg: float) -> Tuple[float, float]:
@@ -116,9 +118,12 @@ def apply_edge_exposure_to_costs(
     """Writes a `route_cost` attribute onto every edge of `graph`, in place,
     from an already-computed edge_exposure map (see `snap_potholes_to_edges`)."""
     for u, v, key, data in graph.edges(keys=True, data=True):
-        length_m = data.get("length", 0.0)
+        # Falls back to raw length (mixing units) only if travel_time is
+        # missing -- shouldn't happen for graphs from route_planner.graph,
+        # but keeps this usable against ad-hoc/synthetic graphs.
+        travel_time_s = data.get("travel_time", data.get("length", 0.0))
         exposure = edge_exposure.get((u, v, key), 0.0)
-        data[ROUTE_COST_ATTR] = length_m + config.avoidance_weight * config.penalty_per_severity_m * exposure
+        data[ROUTE_COST_ATTR] = travel_time_s + config.avoidance_weight * config.penalty_per_severity_s * exposure
 
 
 def annotate_pothole_costs(

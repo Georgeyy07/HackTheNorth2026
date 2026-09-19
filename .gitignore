@@ -3,6 +3,7 @@
 /artifacts/
 /reports/
 /cache/
+/route_planner/demo_output/
 /road_training/data*/
 **/checkpoints/
 **/plots/
