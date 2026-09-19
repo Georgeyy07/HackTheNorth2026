@@ -92,6 +92,26 @@
           </div>
         </section>
 
+        <section class="potholes-card" id="route-finder-panel">
+          <div class="card-label">
+            <span style="color:#00f2fe;font-weight:700">ROUTE FINDER</span>
+            <span class="db-tech-tag">Efficiency vs potholes</span>
+          </div>
+          <form id="route-form" class="pothole-form">
+            <div class="form-row">
+              <input type="text" id="route-origin" placeholder="Origin address" required>
+            </div>
+            <div class="form-row">
+              <input type="text" id="route-destination" placeholder="Destination address" required>
+            </div>
+            <div class="form-buttons">
+              <button type="submit" class="tiger-btn primary">Find routes</button>
+            </div>
+          </form>
+          <div id="route-status" class="empty-potholes"></div>
+          <div id="route-results" class="potholes-list"></div>
+        </section>
+
         <section class="events-card"><div class="events-heading"><span>DETECTED ALONG THE WAY</span><span id="event-count">0</span></div><div id="events" class="events-list"><div class="empty-events">New disturbance alerts will appear here as you drive.</div></div></section>
         <div class="task-note" id="task-note"></div>
       </aside>

@@ -21,6 +21,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
+from alert_service.potholes import fetch_active_potholes, severity_label
+from route_planner.cost import RoutingConfig
+from route_planner.graph import geocode_address, load_road_graph, nearest_node
+from route_planner.router import find_routes
+_ROUTE_GRAPH_CACHE = {}
+
+
+def _route_graph(place: str):
+    if place not in _ROUTE_GRAPH_CACHE:
+        _ROUTE_GRAPH_CACHE[place] = load_road_graph(place)
+    return _ROUTE_GRAPH_CACHE[place]
 
 
 HERE = Path(__file__).resolve().parent
@@ -90,6 +101,15 @@ def create_app(export=None, filters=None):
     profile_lookup = {p["id"]:p for p in profiles}
     app = FastAPI(docs_url=None, redoc_url=None)
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)
+
+    @app.middleware("http")
+    async def no_cache_for_static(request, call_next):
+        # Dev convenience: static/index.html edits should always show up on the
+        # next reload, not get served from a stale conditionally-cached copy.
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     def session_folder(session_id):
         if session_id not in sessions:
@@ -173,6 +193,42 @@ def create_app(export=None, filters=None):
         seed_sample_potholes()
         return {"status": "ok", "potholes": get_potholes()}
 
+    @app.get("/api/route")
+    def compute_route(origin: str, destination: str, place: str = "Waterloo, Ontario, Canada"):
+        try:
+            origin_lat, origin_lon = geocode_address(origin)
+            dest_lat, dest_lon = geocode_address(destination)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+        graph = _route_graph(place)
+        origin_node = nearest_node(graph, origin_lat, origin_lon)
+        dest_node = nearest_node(graph, dest_lat, dest_lon)
+
+        potholes = fetch_active_potholes()
+
+        try:
+            result = find_routes(graph, origin_node, dest_node, potholes, config=RoutingConfig())
+        except Exception as exc:
+            raise HTTPException(400, f"No route found: {exc}")
+
+        def serialize(route):
+            return dict(
+                label=route.label, coords=route.coords, distance_m=route.distance_m,
+                duration_s=route.duration_s, risk_rating=route.risk_rating,
+                potholes_encountered=[
+                    dict(id=p.id, lat=p.lat, lon=p.lon, severity=severity_label(p.severity))
+                    for p in route.potholes_encountered
+                ],
+            )
+
+        return dict(
+            origin=dict(lat=origin_lat, lon=origin_lon),
+            destination=dict(lat=dest_lat, lon=dest_lon),
+            routes=[serialize(r) for r in result["routes"]],
+            unmatched_potholes=len(result["unmatched_potholes"]),
+        )
+
     @app.get("/api/session/{session_id}")
     def session_data(session_id: str, profile: str = "original"):
         return Response(payload(session_id, profile), media_type="application/json",
@@ -195,7 +251,7 @@ def create_app(export=None, filters=None):
 
     @app.get("/")
     def index():
-        return FileResponse(HERE / "static/index.html")
+        return FileResponse(HERE / "static/index.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/favicon.ico", status_code=204)
     def favicon():

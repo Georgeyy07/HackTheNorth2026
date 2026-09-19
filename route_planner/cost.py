@@ -80,16 +80,18 @@ def pothole_exposure(lat: float, lon: float, potholes: Iterable[PotholeReport], 
 
 def snap_potholes_to_edges(
     graph, potholes: Iterable[PotholeReport], config: RoutingConfig = RoutingConfig()
-) -> Tuple[Dict[EdgeKey, float], List[PotholeReport]]:
-    """Assigns each pothole's severity to its single nearest road edge.
+) -> Tuple[Dict[EdgeKey, List[PotholeReport]], List[PotholeReport]]:
+    """Assigns each pothole to its single nearest road edge.
 
-    Returns (edge_exposure, unmatched) where edge_exposure maps (u, v, key) ->
-    summed severity, and unmatched lists potholes farther than
-    `max_snap_distance_m` from every edge -- likely bad GPS fixes, surfaced
-    rather than silently dropped or misapplied.
+    Returns (edge_potholes, unmatched) where edge_potholes maps (u, v, key) ->
+    the list of PotholeReports snapped there (so callers can show which real
+    potholes/severities a route passes, not just a summed number), and
+    unmatched lists potholes farther than `max_snap_distance_m` from every
+    edge -- likely bad GPS fixes, surfaced rather than silently dropped or
+    misapplied.
     """
     edges = list(graph.edges(keys=True))
-    edge_exposure: Dict[EdgeKey, float] = {}
+    edge_potholes: Dict[EdgeKey, List[PotholeReport]] = {}
     unmatched: List[PotholeReport] = []
 
     for pothole in potholes:
@@ -107,22 +109,31 @@ def snap_potholes_to_edges(
         if best_edge is None or best_distance > config.max_snap_distance_m:
             unmatched.append(pothole)
         else:
-            edge_exposure[best_edge] = edge_exposure.get(best_edge, 0.0) + pothole.severity
+            edge_potholes.setdefault(best_edge, []).append(pothole)
+            # A two-way street is stored as two separate directed edges with
+            # near-identical geometry. Without this, a pothole snaps to
+            # whichever direction happens to be enumerated first and is
+            # invisible to routes traveling the other way down the same
+            # physical road (confirmed against the real Waterloo graph).
+            u, v, key = best_edge
+            reverse_edge = (v, u, key)
+            if graph.has_edge(v, u, key):
+                edge_potholes.setdefault(reverse_edge, []).append(pothole)
 
-    return edge_exposure, unmatched
+    return edge_potholes, unmatched
 
 
 def apply_edge_exposure_to_costs(
-    graph, edge_exposure: Dict[EdgeKey, float], config: RoutingConfig = RoutingConfig()
+    graph, edge_potholes: Dict[EdgeKey, List[PotholeReport]], config: RoutingConfig = RoutingConfig()
 ) -> None:
     """Writes a `route_cost` attribute onto every edge of `graph`, in place,
-    from an already-computed edge_exposure map (see `snap_potholes_to_edges`)."""
+    from an already-computed edge_potholes map (see `snap_potholes_to_edges`)."""
     for u, v, key, data in graph.edges(keys=True, data=True):
         # Falls back to raw length (mixing units) only if travel_time is
         # missing -- shouldn't happen for graphs from route_planner.graph,
         # but keeps this usable against ad-hoc/synthetic graphs.
         travel_time_s = data.get("travel_time", data.get("length", 0.0))
-        exposure = edge_exposure.get((u, v, key), 0.0)
+        exposure = sum(p.severity for p in edge_potholes.get((u, v, key), []))
         data[ROUTE_COST_ATTR] = travel_time_s + config.avoidance_weight * config.penalty_per_severity_s * exposure
 
 
@@ -131,14 +142,14 @@ def annotate_pothole_costs(
 ) -> List[PotholeReport]:
     """Writes a `route_cost` attribute onto every edge of `graph`, in place.
     Returns the list of potholes that couldn't be matched to any nearby road."""
-    edge_exposure, unmatched = snap_potholes_to_edges(graph, potholes, config)
-    apply_edge_exposure_to_costs(graph, edge_exposure, config)
+    edge_potholes, unmatched = snap_potholes_to_edges(graph, potholes, config)
+    apply_edge_exposure_to_costs(graph, edge_potholes, config)
     return unmatched
 
 
 def pothole_exposure_m(graph, u, v, potholes: Iterable[PotholeReport], config: RoutingConfig) -> float:
-    """Exposure for a single edge (u, v)'s best-matching key, from the full snap assignment.
+    """Total severity for a single edge (u, v)'s best-matching key, from the full snap assignment.
     Convenience wrapper for tests/inspection; prefer `annotate_pothole_costs` for routing."""
-    edge_exposure, _ = snap_potholes_to_edges(graph, potholes, config)
-    matches = [exposure for (eu, ev, _), exposure in edge_exposure.items() if eu == u and ev == v]
-    return sum(matches)
+    edge_potholes, _ = snap_potholes_to_edges(graph, potholes, config)
+    matches = [p for (eu, ev, _), matched in edge_potholes.items() if eu == u and ev == v for p in matched]
+    return sum(p.severity for p in matches)

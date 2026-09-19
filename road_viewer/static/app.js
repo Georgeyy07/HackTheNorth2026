@@ -16,11 +16,13 @@ map.createPane('traveled').style.zIndex = 350;
 map.createPane('quality').style.zIndex = 410;
 map.createPane('alerts').style.zIndex = 450;
 map.createPane('potholes').style.zIndex = 500;
+map.createPane('routeFinder').style.zIndex = 460;
 const routeLayer = L.layerGroup().addTo(map);
 const qualityLayer = L.layerGroup().addTo(map);
 const pendingLayer = L.layerGroup().addTo(map);
 const eventLayer = L.layerGroup().addTo(map);
 const potholeLayer = L.layerGroup().addTo(map);
+const routeFinderLayer = L.layerGroup().addTo(map);
 const renderer = L.canvas({padding: .5});
 
 let tigerPotholes = [];
@@ -164,6 +166,76 @@ $('pothole-form')?.addEventListener('submit', async (e) => {
   });
   $('pothole-form').hidden = true;
   fetchPotholes();
+});
+
+const ROUTE_COLORS = ['#ff4d6d', '#00f2fe', '#ffb454', '#a78bfa'];
+const RISK_COLORS = {None: '#159c78', LOW: '#caaa50', MEDIUM: '#e78043', HIGH: '#c95268', CRITICAL: '#8b1e3f'};
+let routePolylines = [];
+
+function selectRoute(index) {
+  routePolylines.forEach((line, i) => {
+    line.setStyle(i === index ? {weight: 6, opacity: 1} : {weight: 3, opacity: 0.35});
+  });
+  document.querySelectorAll('#route-results .route-option').forEach((el, i) => {
+    el.classList.toggle('selected', i === index);
+  });
+  if (routePolylines[index]) map.fitBounds(routePolylines[index].getBounds(), {padding: [40, 40]});
+}
+
+function formatRoute(route, index, color) {
+  const mins = Math.floor(route.duration_s / 60), secs = Math.round(route.duration_s % 60);
+  const riskColor = RISK_COLORS[route.risk_rating] || '#789c8b';
+  const potholeList = route.potholes_encountered.length
+    ? route.potholes_encountered.map(p => `${p.severity} #${p.id}`).join(', ')
+    : 'none on this route';
+  return `<div class="pothole-item route-option" data-index="${index}" style="cursor:pointer;border-left:3px solid ${color}">` +
+    `<div class="pothole-item-header"><span class="pothole-coords">${route.label}</span>` +
+    `<span class="pothole-sev-badge" style="background:${riskColor}22;color:${riskColor};border:1px solid ${riskColor}">${route.risk_rating} risk</span></div>` +
+    `<div class="pothole-footer"><span>${route.distance_m.toFixed(0)}m · ${mins}m ${secs}s</span></div>` +
+    `<div class="pothole-footer"><span>Potholes: ${potholeList}</span></div></div>`;
+}
+
+$('route-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const origin = $('route-origin').value.trim();
+  const destination = $('route-destination').value.trim();
+  const statusEl = $('route-status'), resultsEl = $('route-results');
+  resultsEl.replaceChildren();
+  statusEl.textContent = 'Finding routes… (first run downloads the road network, ~15-20s)';
+  routeFinderLayer.clearLayers();
+  routePolylines = [];
+
+  try {
+    const url = `/api/route?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (${res.status})`);
+    }
+    const data = await res.json();
+
+    data.routes.forEach((route, i) => {
+      const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+      const line = L.polyline(route.coords, {color, weight: 3, opacity: 0.35, pane: 'routeFinder'})
+        .bindTooltip(`${route.label}: ${route.distance_m.toFixed(0)}m, risk ${route.risk_rating}`)
+        .on('click', () => selectRoute(i))
+        .addTo(routeFinderLayer);
+      routePolylines.push(line);
+    });
+    L.marker([data.origin.lat, data.origin.lon], {pane: 'routeFinder'}).bindTooltip('Origin').addTo(routeFinderLayer);
+    L.marker([data.destination.lat, data.destination.lon], {pane: 'routeFinder'}).bindTooltip('Destination').addTo(routeFinderLayer);
+
+    statusEl.textContent = data.unmatched_potholes
+      ? `${data.unmatched_potholes} pothole report(s) too far from any road to route around.`
+      : `${data.routes.length} route option(s) found — click one to highlight it.`;
+    resultsEl.innerHTML = data.routes.map((r, i) => formatRoute(r, i, ROUTE_COLORS[i % ROUTE_COLORS.length])).join('');
+    resultsEl.querySelectorAll('.route-option').forEach(el => {
+      el.addEventListener('click', () => selectRoute(parseInt(el.dataset.index, 10)));
+    });
+    selectRoute(0);
+  } catch (err) {
+    statusEl.textContent = `Could not find a route: ${err.message}`;
+  }
 });
 
 const car = L.marker([0, 0], {zIndexOffset: 1000, interactive: false, icon: L.divIcon({

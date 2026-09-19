@@ -33,6 +33,7 @@
 .potholes-list{max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:7px;padding-right:3px}
 .pothole-item{background:#152b22;border:1px solid #214739;border-radius:8px;padding:9px;display:flex;flex-direction:column;gap:5px;transition:border-color 0.2s}
 .pothole-item:hover{border-color:#00f2fe}
+.route-option.selected{border-color:#00f2fe;background:#1a3a30}
 .pothole-item-header{display:flex;justify-content:space-between;align-items:center}
 .pothole-sev-badge{font-size:8px;font-weight:800;padding:2px 6px;border-radius:4px;text-transform:uppercase}
 .pothole-sev-badge.CRITICAL{background:#ff4d6d;color:#fff}

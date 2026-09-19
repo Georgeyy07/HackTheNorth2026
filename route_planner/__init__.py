@@ -1,10 +1,11 @@
 from .cost import RoutingConfig, annotate_pothole_costs, pothole_exposure_m
-from .router import RouteResult, find_route
+from .router import DEFAULT_PRESETS, RouteResult, find_routes
 
 __all__ = [
     "RoutingConfig",
     "annotate_pothole_costs",
     "pothole_exposure_m",
+    "DEFAULT_PRESETS",
     "RouteResult",
-    "find_route",
+    "find_routes",
 ]

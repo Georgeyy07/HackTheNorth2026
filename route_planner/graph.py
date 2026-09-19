@@ -48,6 +48,16 @@ def load_road_graph(place: str, cache_dir: Path = DEFAULT_CACHE_DIR):
     return graph
 
 
+def geocode_address(address: str) -> tuple[float, float]:
+    """Turns a human address/place string (e.g. "200 University Ave W, Waterloo, ON")
+    into (lat, lon) via OpenStreetMap's Nominatim geocoder. Needs network access;
+    raises ValueError if Nominatim can't find a match."""
+    try:
+        return ox.geocode(address)
+    except Exception as exc:  # osmnx raises its own InsufficientResponseError etc.
+        raise ValueError(f"Could not geocode address: {address!r}") from exc
+
+
 def nearest_node(graph, lat: float, lon: float):
     """Finds the graph node closest to a raw GPS coordinate.
 
