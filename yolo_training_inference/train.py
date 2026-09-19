@@ -5,7 +5,7 @@ from roboflow import Roboflow
 from ultralytics import YOLO
 
 # --- Step 1: download both datasets ---
-ROBOFLOW_API_KEY = Roboflow(api_key=os.environ["zrg8xXZCdRqtWfmVmCJp"])
+rf = Roboflow(api_key=os.environ["ROBOFLOW_API_KEY"])
 
 project1 = rf.workspace("potholes-r7qcn").project("pothole-jujbl")
 dataset1 = project1.version(1).download("yolo26")
@@ -35,4 +35,14 @@ names: ['pothole']
 
 # --- Step 4: train on the merged dataset ---
 model = YOLO("yolo26n.pt")
-model.train(data=str(combined / "data.yaml"), epochs=50, imgsz=640, device=0)
+results = model.train(data=str(combined / "data.yaml"), epochs=50, imgsz=640, device=0)
+
+# --- Step 5: persist weights to the checkpoint volume so they survive job teardown ---
+checkpoint_dir = Path(os.environ.get("CHECKPOINT_PATH", "/b10/workspace/checkpoints"))
+checkpoint_dir.mkdir(parents=True, exist_ok=True)
+weights_dir = Path(results.save_dir) / "weights"
+for weight_file in ["best.pt", "last.pt"]:
+    src = weights_dir / weight_file
+    if src.exists():
+        shutil.copy2(src, checkpoint_dir / weight_file)
+        print(f"Saved {weight_file} to {checkpoint_dir / weight_file}")
