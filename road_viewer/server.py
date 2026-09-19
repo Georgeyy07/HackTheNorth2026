@@ -15,6 +15,11 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 import sys
+import time
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("road_viewer")
 
 # Ensure repository root is in sys.path when executed directly as a script
 ROOT = Path(__file__).resolve().parent.parent
@@ -213,11 +218,17 @@ def create_app(export=None, filters=None):
 
     @app.get("/api/route")
     def compute_route(origin: str, destination: str, avoidance_weight: float = 3.0):
+        t0 = time.monotonic()
+        logger.info("compute_route: origin=%r destination=%r", origin, destination)
         try:
             origin_lat, origin_lon = geocode_address(origin)
             dest_lat, dest_lon = geocode_address(destination)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+        logger.info(
+            "compute_route: geocoded origin=(%.5f,%.5f) destination=(%.5f,%.5f) in %.1fs",
+            origin_lat, origin_lon, dest_lat, dest_lon, time.monotonic() - t0,
+        )
 
         try:
             graph = _route_graph(origin_lat, origin_lon, dest_lat, dest_lon)
@@ -225,6 +236,10 @@ def create_app(export=None, filters=None):
             raise HTTPException(400, str(exc))
         except Exception as exc:
             raise HTTPException(502, f"Could not load the road network for this area: {exc}")
+        logger.info(
+            "compute_route: graph ready (%d nodes) in %.1fs total",
+            graph.number_of_nodes(), time.monotonic() - t0,
+        )
         origin_node = nearest_node(graph, origin_lat, origin_lon)
         dest_node = nearest_node(graph, dest_lat, dest_lon)
 
@@ -270,6 +285,7 @@ def create_app(export=None, filters=None):
                 ],
             )
 
+        logger.info("compute_route: done in %.1fs total (%d routes)", time.monotonic() - t0, len(result["routes"]))
         return dict(
             origin=dict(lat=origin_lat, lon=origin_lon),
             destination=dict(lat=dest_lat, lon=dest_lon),
