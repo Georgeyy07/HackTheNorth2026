@@ -200,20 +200,39 @@ def add_pothole(
     }
 
 
-def update_pothole(pothole_id: int, severity: Optional[str] = None) -> bool:
-    """Update pothole severity in Tiger Data database."""
+def update_pothole(
+    pothole_id: int,
+    severity: Optional[str] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None
+) -> bool:
+    """Update pothole severity and/or location in Tiger Data database."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if not severity:
+    set_clauses = []
+    params = []
+    placeholder = "%s" if USE_POSTGRES else "?"
+    
+    if severity is not None:
+        set_clauses.append(f"severity = {placeholder}")
+        params.append(severity)
+    if latitude is not None:
+        set_clauses.append(f"latitude = {placeholder}")
+        params.append(float(latitude))
+    if longitude is not None:
+        set_clauses.append(f"longitude = {placeholder}")
+        params.append(float(longitude))
+        
+    if not set_clauses:
         conn.close()
         return False
         
-    ph_clause = "WHERE id = ?" if not USE_POSTGRES else "WHERE id = %s"
-    sev_clause = "severity = ?" if not USE_POSTGRES else "severity = %s"
-    sql = f"UPDATE potholes SET {sev_clause} {ph_clause}"
+    ph_clause = f"WHERE id = {placeholder}"
+    params.append(pothole_id)
+    sql = f"UPDATE potholes SET {', '.join(set_clauses)} {ph_clause}"
     
-    cursor.execute(sql, (severity, pothole_id))
+    cursor.execute(sql, tuple(params))
     conn.commit()
     affected = cursor.rowcount > 0
     cursor.close()

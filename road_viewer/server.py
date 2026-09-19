@@ -10,6 +10,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -89,6 +90,13 @@ def create_app(export=None, filters=None):
     profiles = read(profile_file)["profiles"] if profile_file.exists() else [dict(id="original", label="Original post-processing", config={})]
     profile_lookup = {p["id"]:p for p in profiles}
     app = FastAPI(docs_url=None, redoc_url=None)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)
 
     def session_folder(session_id):
@@ -155,7 +163,9 @@ def create_app(export=None, filters=None):
     def modify_pothole(pothole_id: int, payload: dict = Body(...)):
         success = update_pothole(
             pothole_id=pothole_id,
-            severity=payload.get("severity")
+            severity=payload.get("severity"),
+            latitude=payload.get("latitude"),
+            longitude=payload.get("longitude")
         )
         if not success:
             raise HTTPException(404, "Pothole not found or no changes made")
