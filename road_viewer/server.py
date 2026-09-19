@@ -219,7 +219,12 @@ def create_app(export=None, filters=None):
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
-        graph = _route_graph(origin_lat, origin_lon, dest_lat, dest_lon)
+        try:
+            graph = _route_graph(origin_lat, origin_lon, dest_lat, dest_lon)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except Exception as exc:
+            raise HTTPException(502, f"Could not load the road network for this area: {exc}")
         origin_node = nearest_node(graph, origin_lat, origin_lon)
         dest_node = nearest_node(graph, dest_lat, dest_lon)
 

@@ -26,6 +26,14 @@ DEFAULT_CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "road
 # road that bulges slightly outside the straight-line box between the two
 # points (e.g. going around a lake or highway interchange).
 ROUTE_BBOX_BUFFER_M = 2000.0
+# A mistyped or ambiguous address can geocode to the wrong side of the
+# world (confirmed: this happened during testing -- Overpass reported the
+# resulting bbox as "1,063 times" its normal query size and then hung for
+# 180s before timing out). Reject far-apart pairs immediately instead of
+# attempting to download a country-sized chunk of OpenStreetMap.
+MAX_ROUTE_DISTANCE_M = 100_000.0  # 100km -- generous for a single city/region trip
+# Fail fast rather than hanging on a slow/overloaded Overpass mirror.
+ox.settings.requests_timeout = 30
 
 
 def _ensure_travel_times(graph):
@@ -64,7 +72,18 @@ def load_road_graph_for_route(
     by bounding box -- works anywhere in the world, not just one hardcoded
     city (a fixed `place` name meant routing silently broke, or geocoded to
     the wrong nearest node, for any city other than the one hardcoded).
-    Every edge carries `length` (meters), `speed_kph`, and `travel_time` (seconds)."""
+    Every edge carries `length` (meters), `speed_kph`, and `travel_time` (seconds).
+    Raises ValueError if the two points are farther apart than
+    MAX_ROUTE_DISTANCE_M, rather than attempting to download and route over
+    a country-sized road network."""
+    distance_m = haversine_distance_m(origin_lat, origin_lon, dest_lat, dest_lon)
+    if distance_m > MAX_ROUTE_DISTANCE_M:
+        raise ValueError(
+            f"Origin and destination are {distance_m / 1000:.0f}km apart, over the "
+            f"{MAX_ROUTE_DISTANCE_M / 1000:.0f}km limit -- check the addresses geocoded "
+            f"to the right place, or pick two points closer together."
+        )
+
     south, north = sorted((origin_lat, dest_lat))
     west, east = sorted((origin_lon, dest_lon))
 

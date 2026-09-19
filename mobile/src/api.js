@@ -19,13 +19,24 @@ function resolveApiBaseUrl() {
 
 export const API_BASE_URL = resolveApiBaseUrl();
 
-async function request(path, options) {
-  const res = await fetch(`${API_BASE_URL}${path}`, options);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed (${res.status})`);
+async function request(path, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, { ...options, signal: controller.signal });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (${res.status})`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s -- check your connection or try a closer address.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res.json();
 }
 
 export function getPotholes(severity) {
@@ -48,10 +59,12 @@ export function deletePothole(id) {
 export function getRoute(origin, destination, avoidanceWeight) {
   const params = new URLSearchParams({ origin, destination });
   if (avoidanceWeight !== undefined) params.set('avoidance_weight', String(avoidanceWeight));
-  return request(`/api/route?${params.toString()}`);
+  // Generous timeout: the first request for a new area downloads and caches
+  // real road network data from OpenStreetMap, which can take 15-30s.
+  return request(`/api/route?${params.toString()}`, {}, 45000);
 }
 
 export function suggestAddresses(query) {
   const params = new URLSearchParams({ q: query });
-  return request(`/api/geocode/suggest?${params.toString()}`);
+  return request(`/api/geocode/suggest?${params.toString()}`, {}, 8000);
 }
