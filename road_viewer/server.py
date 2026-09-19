@@ -23,15 +23,19 @@ if str(ROOT) not in sys.path:
 from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
 from alert_service.potholes import fetch_active_potholes, severity_label
 from route_planner.cost import RoutingConfig
-from route_planner.graph import geocode_address, load_road_graph, nearest_node
+from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node
 from route_planner.router import find_routes
 _ROUTE_GRAPH_CACHE = {}
 
 
-def _route_graph(place: str):
-    if place not in _ROUTE_GRAPH_CACHE:
-        _ROUTE_GRAPH_CACHE[place] = load_road_graph(place)
-    return _ROUTE_GRAPH_CACHE[place]
+def _route_graph(origin_lat: float, origin_lon: float, dest_lat: float, dest_lon: float):
+    # Rounded to ~100m so re-queries for the same origin/destination (e.g. the
+    # user just moving the pothole-caution slider and re-searching) reuse the
+    # in-memory graph instead of reloading from disk each time.
+    key = (round(origin_lat, 3), round(origin_lon, 3), round(dest_lat, 3), round(dest_lon, 3))
+    if key not in _ROUTE_GRAPH_CACHE:
+        _ROUTE_GRAPH_CACHE[key] = load_road_graph_for_route(origin_lat, origin_lon, dest_lat, dest_lon)
+    return _ROUTE_GRAPH_CACHE[key]
 
 
 HERE = Path(__file__).resolve().parent
@@ -194,19 +198,29 @@ def create_app(export=None, filters=None):
         return {"status": "ok", "potholes": get_potholes()}
 
     @app.get("/api/route")
-    def compute_route(origin: str, destination: str, place: str = "Waterloo, Ontario, Canada",
-                       avoidance_weight: float = 3.0):
+    def compute_route(origin: str, destination: str, avoidance_weight: float = 3.0):
         try:
             origin_lat, origin_lon = geocode_address(origin)
             dest_lat, dest_lon = geocode_address(destination)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
-        graph = _route_graph(place)
+        graph = _route_graph(origin_lat, origin_lon, dest_lat, dest_lon)
         origin_node = nearest_node(graph, origin_lat, origin_lon)
         dest_node = nearest_node(graph, dest_lat, dest_lon)
 
-        potholes = fetch_active_potholes()
+        # Potholes are matched against roads in the loaded bbox, so anything
+        # outside the origin/destination area is unmatched by definition --
+        # not "too far from any road," just outside the region this route
+        # cares about. Pre-filter to the graph's own bounding box first.
+        graph_lats = [data["y"] for _, data in graph.nodes(data=True)]
+        graph_lons = [data["x"] for _, data in graph.nodes(data=True)]
+        lat_min, lat_max = min(graph_lats), max(graph_lats)
+        lon_min, lon_max = min(graph_lons), max(graph_lons)
+        potholes = [
+            p for p in fetch_active_potholes()
+            if lat_min <= p.lat <= lat_max and lon_min <= p.lon <= lon_max
+        ]
 
         # "Fastest" (0) and "Max avoidance" (15, a strong fixed ceiling) stay as
         # reference points; "Recommended" is exactly the caller's dial, so
@@ -225,6 +239,7 @@ def create_app(export=None, filters=None):
             return dict(
                 label=route.label, coords=route.coords, distance_m=route.distance_m,
                 duration_s=route.duration_s, risk_rating=route.risk_rating,
+                pothole_count=len(route.potholes_encountered),
                 potholes_encountered=[
                     dict(id=p.id, lat=p.lat, lon=p.lon, severity=severity_label(p.severity))
                     for p in route.potholes_encountered

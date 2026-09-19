@@ -285,7 +285,7 @@ export default function RouteFinderScreen() {
                   </View>
                 </View>
                 <Text style={styles.routeMeta}>{Math.round(route.distance_m)}m · ETA {mins}m {secs}s · {route.directions.length} turns</Text>
-                <Text style={styles.routePotholes}>Potholes: {potholeList}</Text>
+                <Text style={styles.routePotholes}>{route.pothole_count} pothole{route.pothole_count === 1 ? '' : 's'}: {potholeList}</Text>
               </TouchableOpacity>
             );
           })}

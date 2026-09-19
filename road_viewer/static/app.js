@@ -192,7 +192,7 @@ function formatRoute(route, index, color) {
     `<div class="pothole-item-header"><span class="pothole-coords">${route.label}</span>` +
     `<span class="pothole-sev-badge" style="background:${riskColor}22;color:${riskColor};border:1px solid ${riskColor}">${route.risk_rating} risk</span></div>` +
     `<div class="pothole-footer"><span>${route.distance_m.toFixed(0)}m · ${mins}m ${secs}s</span></div>` +
-    `<div class="pothole-footer"><span>Potholes: ${potholeList}</span></div></div>`;
+    `<div class="pothole-footer"><span>${route.pothole_count} pothole${route.pothole_count === 1 ? '' : 's'}: ${potholeList}</span></div></div>`;
 }
 
 $('route-form')?.addEventListener('submit', async (e) => {
