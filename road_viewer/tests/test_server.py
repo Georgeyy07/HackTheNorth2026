@@ -96,3 +96,38 @@ def test_environment_paths_and_optional_profiles_are_resolved(replay, tmp_path, 
     assert value['profile']['id'] == 'smoothed'
     assert value['updates'][0]['probability'] == .4
     assert client.get('/api/updates/kaggle_fixture?profile=smoothed').status_code == 200
+
+
+def test_potholes_api_crud_operations(replay):
+    client, _, _ = replay
+    # GET list
+    response = client.get('/api/potholes')
+    assert response.status_code == 200
+    potholes = response.json()
+    assert isinstance(potholes, list)
+
+    # POST create new pothole
+    new_pothole = {
+        "latitude": 43.4723,
+        "longitude": -80.5449,
+        "severity": "HIGH"
+    }
+    create_res = client.post('/api/potholes', json=new_pothole)
+    assert create_res.status_code == 200
+    created = create_res.json()
+    assert created['latitude'] == 43.4723
+    assert created['severity'] == "HIGH"
+    p_id = created['id']
+
+    # GET with severity filter
+    filtered_res = client.get('/api/potholes?severity=HIGH')
+    assert filtered_res.status_code == 200
+    assert any(p['id'] == p_id for p in filtered_res.json())
+
+    # PUT update severity
+    update_res = client.put(f'/api/potholes/{p_id}', json={"severity": "CRITICAL"})
+    assert update_res.status_code == 200
+
+    # DELETE pothole
+    del_res = client.delete(f'/api/potholes/{p_id}')
+    assert del_res.status_code == 200

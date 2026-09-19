@@ -10,7 +10,16 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/" aria-label="Roadscope home"><span class="brand-icon"><svg viewBox="0 0 24 24"><path d="M7 3 3 21m14-18 4 18M12 3v4m0 3v4m0 3v4"/></svg></span>roadscope<span class="brand-divider"></span><span class="brand-section">Replay lab</span></a>
-    <div class="top-actions"><span class="recorded-pill"><i></i> RECORDED TEST DATA</span><button id="about" class="text-button">About this replay <span aria-hidden="true">↗</span></button><a class="download" href="/export" title="Download the full inference dataset">Export data <span aria-hidden="true">↓</span></a></div>
+    <div class="top-actions">
+      <div id="tiger-db-badge" class="tiger-db-pill">
+        <i class="pulse-dot"></i>
+        <span>TIGER DATA DB</span>
+        <small id="pothole-count-badge">0 Potholes</small>
+      </div>
+      <span class="recorded-pill"><i></i> RECORDED TEST DATA</span>
+      <button id="about" class="text-button">About this replay <span aria-hidden="true">↗</span></button>
+      <a class="download" href="/export" title="Download the full inference dataset">Export data <span aria-hidden="true">↓</span></a>
+    </div>
   </header>
   <main>
     <section class="page-heading">
@@ -23,7 +32,7 @@
         <div id="map" aria-label="Map of the driven route and predicted road conditions"></div>
         <div class="map-topline"><span class="map-status" id="map-status"><i></i> LOADING DRIVE</span><span class="map-place" id="place">Larisa, Greece</span></div>
         <div class="map-tools"><button id="follow" class="tool active" title="Follow the car" aria-label="Follow the car" aria-pressed="true">◎</button><button id="fit" class="tool" title="Fit traveled route" aria-label="Fit traveled route">⤢</button></div>
-        <div class="map-legend"><span class="legend-title">ESTIMATED ROUGHNESS</span><span><i style="--color:#159c78"></i>Good</span><span><i style="--color:#d2ae36"></i>Medium</span><span><i style="--color:#e78043"></i>Bad</span><span><i style="--color:#c95268"></i>Terrible</span><span class="legend-event"><i></i>Disturbance</span></div>
+        <div class="map-legend"><span class="legend-title">ESTIMATED ROUGHNESS</span><span><i style="--color:#159c78"></i>Good</span><span><i style="--color:#d2ae36"></i>Medium</span><span><i style="--color:#e78043"></i>Bad</span><span><i style="--color:#c95268"></i>Terrible</span><span class="legend-event"><i></i>Disturbance</span><span class="legend-event" style="color:#ff4d6d"><i></i>Tiger DB Pothole</span></div>
         <div class="map-caption" id="map-caption">Road colors appear after the prediction is finalized.</div>
         <div id="tile-warning" class="tile-warning" hidden>Street tiles unavailable. GPS and inference overlays remain active.</div>
         <div class="loading-cover" id="loading" role="status"><span class="spinner"></span><strong>Preparing your drive</strong><span>Loading sensor readings and timed predictions…</span></div>
@@ -46,6 +55,43 @@
           <div class="prediction-footnote"><span id="disturbance-note">Manholes, cracks, bumps & depressions</span></div>
         </section>
         <div class="motion-row"><section><div class="card-label">Vehicle speed</div><strong id="speed">—</strong><span class="unit">km/h</span></section><section><div class="card-label">GPS signal <i id="gps-dot" class="gps-dot"></i></div><strong id="gps-state" class="gps-state">Waiting</strong><span id="gps-age" class="gps-age">No fix yet</span></section></div>
+
+        <!-- Tiger Data Potholes Database Section -->
+        <section class="potholes-card" id="tiger-potholes-panel">
+          <div class="card-label">
+            <span style="color:#00f2fe;font-weight:700">TIGER DATA POTHOLES</span>
+            <span class="db-tech-tag">TimescaleDB</span>
+          </div>
+          <div class="pothole-actions-bar">
+            <button id="seed-potholes-btn" class="tiger-btn primary">Seed Tiger DB</button>
+            <button id="toggle-add-pothole-btn" class="tiger-btn outline">+ Report Pothole</button>
+          </div>
+          
+          <form id="pothole-form" class="pothole-form" hidden>
+            <div class="form-title">Report Hazard to Tiger Data</div>
+            <div class="form-row">
+              <input type="number" step="0.0001" id="ph-lat" placeholder="Latitude" required>
+              <input type="number" step="0.0001" id="ph-lng" placeholder="Longitude" required>
+            </div>
+            <div class="form-row">
+              <select id="ph-severity">
+                <option value="CRITICAL">Critical</option>
+                <option value="HIGH">High</option>
+                <option value="MEDIUM" selected>Medium</option>
+                <option value="LOW">Low</option>
+              </select>
+            </div>
+            <div class="form-buttons">
+              <button type="submit" class="tiger-btn primary">Save to Tiger DB</button>
+              <button type="button" id="cancel-pothole-btn" class="tiger-btn">Cancel</button>
+            </div>
+          </form>
+
+          <div id="potholes-list" class="potholes-list">
+            <div class="empty-potholes">Loading Tiger Data potholes...</div>
+          </div>
+        </section>
+
         <section class="events-card"><div class="events-heading"><span>DETECTED ALONG THE WAY</span><span id="event-count">0</span></div><div id="events" class="events-list"><div class="empty-events">New disturbance alerts will appear here as you drive.</div></div></section>
         <div class="task-note" id="task-note"></div>
       </aside>
@@ -58,7 +104,7 @@
     </section>
 
     <section class="player" aria-label="Playback controls">
-      <div class="transport"><button id="restart" class="icon-button" title="Restart drive" aria-label="Restart drive">↺</button><button id="play" class="play-button" aria-label="Play" disabled><svg viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z"/></svg></button><button id="next-event" class="icon-button" title="Jump to the next disturbance alert" aria-label="Next disturbance">↦</button></div>
+      <div class="transport"><button id="restart" class="icon-button" title="Restart drive" aria-label="Restart drive">↺</button><button id="play" class="play-button" aria-label="Play" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></button><button id="next-event" class="icon-button" title="Jump to the next disturbance alert" aria-label="Next disturbance">↦</button></div>
       <div class="scrubber"><div class="scrubber-label"><strong id="elapsed">00:00.0</strong><span id="playback-label">Preparing replay</span><span id="duration">00:00</span></div><input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Replay position" disabled><div class="scrubber-bottom"><span id="utc-clock">—</span><span id="coverage">Every timestep · no windows skipped</span></div></div>
       <label class="rate-control" for="rate"><span>PLAYBACK</span><select id="rate"><option value="1">1× real time</option><option value="2">2× speed</option><option value="5">5× speed</option><option value="10">10× speed</option><option value="25">25× speed</option><option value="50">50× speed</option></select></label>
     </section>

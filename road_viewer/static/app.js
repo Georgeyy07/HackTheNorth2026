@@ -15,11 +15,157 @@ const map = L.map('map', {zoomControl: true, preferCanvas: true, minZoom: 3}).se
 map.createPane('traveled').style.zIndex = 350;
 map.createPane('quality').style.zIndex = 410;
 map.createPane('alerts').style.zIndex = 450;
+map.createPane('potholes').style.zIndex = 500;
 const routeLayer = L.layerGroup().addTo(map);
 const qualityLayer = L.layerGroup().addTo(map);
 const pendingLayer = L.layerGroup().addTo(map);
 const eventLayer = L.layerGroup().addTo(map);
+const potholeLayer = L.layerGroup().addTo(map);
 const renderer = L.canvas({padding: .5});
+
+let tigerPotholes = [];
+const potholeMarkers = new Map();
+
+async function fetchPotholes() {
+  try {
+    const res = await fetch('/api/potholes');
+    if (!res.ok) return;
+    tigerPotholes = await res.json();
+    renderPotholes();
+  } catch (e) {
+    console.error("Failed to fetch Tiger Data potholes:", e);
+  }
+}
+
+function renderPotholes() {
+  potholeLayer.clearLayers();
+  potholeMarkers.clear();
+  
+  const countBadge = $('pothole-count-badge');
+  if (countBadge) countBadge.textContent = `${tigerPotholes.length} Potholes`;
+
+  const listContainer = $('potholes-list');
+  if (listContainer) {
+    listContainer.replaceChildren();
+    if (!tigerPotholes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-potholes';
+      empty.style.color = '#789c8b';
+      empty.style.fontSize = '10px';
+      empty.textContent = 'No potholes registered in Tiger Data DB.';
+      listContainer.append(empty);
+    }
+  }
+
+  tigerPotholes.forEach(ph => {
+    const markerIcon = L.divIcon({
+      className: 'pothole-marker',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+      html: `<div class="pothole-marker-icon" title="${ph.severity} Pothole"><div class="pothole-marker-inner"></div></div>`
+    });
+
+    let timeStr = '';
+    if (ph.timestamp) {
+      const d = new Date(ph.timestamp);
+      timeStr = !Number.isNaN(d.getTime()) ? d.toLocaleTimeString() : '';
+    }
+
+    const popupContent = `
+      <div style="font-family:sans-serif;padding:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
+          <strong style="color:#ff4d6d">⚠️ ${ph.severity} POTHOLE</strong>
+          <span style="font-size:9px;background:#0d2b22;color:#00f2fe;padding:2px 5px;border-radius:4px">Tiger DB #${ph.id}</span>
+        </div>
+        <div style="font-size:9px;color:#666">
+          📍 ${ph.latitude.toFixed(4)}, ${ph.longitude.toFixed(4)} ${timeStr ? '• ' + timeStr : ''}
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button onclick="window.deletePotholeFromDB(${ph.id})" style="background:#ff4d6d;color:#fff;border:none;padding:4px 8px;border-radius:4px;font-size:9px;cursor:pointer">Delete Record</button>
+        </div>
+      </div>
+    `;
+
+    const marker = L.marker([ph.latitude, ph.longitude], {
+      icon: markerIcon,
+      pane: 'potholes'
+    }).bindPopup(popupContent).addTo(potholeLayer);
+
+    potholeMarkers.set(ph.id, marker);
+
+    if (listContainer) {
+      const item = document.createElement('div');
+      item.className = 'pothole-item';
+      item.innerHTML = `
+        <div class="pothole-item-header">
+          <span class="pothole-sev-badge ${ph.severity}">${ph.severity}</span>
+          <span class="pothole-coords">${ph.latitude.toFixed(4)}, ${ph.longitude.toFixed(4)}</span>
+        </div>
+        <div class="pothole-footer">
+          <span>Tiger DB #${ph.id}</span>
+          <div class="pothole-footer-btns">
+            <button class="tiger-btn danger" onclick="window.deletePotholeFromDB(${ph.id})">✕ Delete</button>
+          </div>
+        </div>
+      `;
+      item.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'BUTTON') {
+          map.setView([ph.latitude, ph.longitude], 17);
+          marker.openPopup();
+        }
+      });
+      listContainer.append(item);
+    }
+  });
+}
+
+window.deletePotholeFromDB = async (id) => {
+  await fetch(`/api/potholes/${id}`, {method: 'DELETE'});
+  fetchPotholes();
+};
+
+window.seedTigerPotholes = async () => {
+  await fetch('/api/potholes/seed', {method: 'POST'});
+  fetchPotholes();
+};
+
+map.on('click', (e) => {
+  const form = $('pothole-form');
+  if (form) {
+    $('ph-lat').value = e.latlng.lat.toFixed(5);
+    $('ph-lng').value = e.latlng.lng.toFixed(5);
+    form.hidden = false;
+  }
+});
+
+$('toggle-add-pothole-btn')?.addEventListener('click', () => {
+  const form = $('pothole-form');
+  if (form) form.hidden = !form.hidden;
+});
+
+$('cancel-pothole-btn')?.addEventListener('click', () => {
+  const form = $('pothole-form');
+  if (form) form.hidden = true;
+});
+
+$('seed-potholes-btn')?.addEventListener('click', window.seedTigerPotholes);
+
+$('pothole-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    latitude: parseFloat($('ph-lat').value),
+    longitude: parseFloat($('ph-lng').value),
+    severity: $('ph-severity').value
+  };
+  await fetch('/api/potholes', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  $('pothole-form').hidden = true;
+  fetchPotholes();
+});
+
 const car = L.marker([0, 0], {zIndexOffset: 1000, interactive: false, icon: L.divIcon({
   className: 'car-icon', iconSize: [42, 42], iconAnchor: [21, 21],
   html: '<div class="car-halo"><div class="car-arrow"><svg viewBox="0 0 24 24"><path d="m12 2 8 19-8-4-8 4Z"/></svg></div></div>',
@@ -44,8 +190,8 @@ function setPlaying(value) {
   lastFrame = performance.now();
   $('play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
   $('play').innerHTML = playing
-    ? '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zm7 0h4v14h-4z"/></svg>'
-    : '<svg viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z"/></svg>';
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
   if (engine) renderReadout();
 }
 
@@ -112,6 +258,7 @@ async function loadSession(id, initialTime = 0, autoplay = true, profile = $('pr
     if (error.name === 'AbortError' || request !== requestNumber) return;
     loading = false; $('loading').hidden = true; $('load-error').hidden = false;
     $('error-message').textContent = error.message;
+    $('play').disabled = true; $('seek').disabled = true;
   }
 }
 
@@ -212,8 +359,18 @@ function renderReadout() {
   $('playback-label').textContent = label;
   $('map-status').innerHTML = `<i></i>${engine.ended ? 'DRIVE COMPLETE' : playing ? 'REPLAY IN PROGRESS' : 'REPLAY PAUSED'}`;
   $('coverage').textContent = `${Math.max(0, engine.sampleIndex + 1).toLocaleString()} / ${engine.data.session.samples.toLocaleString()} samples observed`;
-  const origin = Number(engine.data.session.timestamp_origin_unix_ns) / 1e6;
-  $('utc-clock').textContent = new Date(origin + engine.time * 1000).toISOString().replace('T', ' ').slice(0, 23) + ' UTC';
+  const rawOrigin = engine.data.session.timestamp_origin_unix_ns;
+  const originMs = (rawOrigin != null && rawOrigin !== '') ? Number(rawOrigin) / 1e6 : null;
+  if (originMs != null && !Number.isNaN(originMs) && Number.isFinite(originMs)) {
+    const d = new Date(originMs + engine.time * 1000);
+    if (!Number.isNaN(d.getTime())) {
+      $('utc-clock').textContent = d.toISOString().replace('T', ' ').slice(0, 23) + ' UTC';
+    } else {
+      $('utc-clock').textContent = '—';
+    }
+  } else {
+    $('utc-clock').textContent = '—';
+  }
   const iri = final?.valid ? final.iri_m_per_km : null;
   $('iri').textContent = iri == null ? '—' : iri.toFixed(2);
   $('quality-badge').textContent = iri == null ? 'Waiting' : NAMES[final.quality_grade];
@@ -419,6 +576,7 @@ try {
     $('profile').append(option);
   }
   $('profile').disabled = false;
+  fetchPotholes();
   const tiles = L.tileLayer(catalog.tile_url, {maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors', keepBuffer: 2}).addTo(map);
   let failed = 0;
   tiles.on('tileerror', () => {failed++; if (failed >= 3) $('tile-warning').hidden = false;});
