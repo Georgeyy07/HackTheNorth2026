@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
@@ -6,6 +7,18 @@ import PotholesScreen from './src/screens/PotholesScreen';
 import RouteFinderScreen from './src/screens/RouteFinderScreen';
 
 const Tab = createBottomTabNavigator();
+
+// Turn notifications should show even while the app is in the foreground
+// (that's when you're actually driving and looking at the map).
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function App() {
   return (

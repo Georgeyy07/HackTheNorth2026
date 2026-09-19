@@ -19,6 +19,15 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "RoughRoute uses your location to track progress along a route and announce upcoming turns."
+        }
+      ],
+      "expo-notifications"
+    ]
   }
 }

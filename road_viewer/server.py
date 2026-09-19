@@ -220,6 +220,11 @@ def create_app(export=None, filters=None):
                     dict(id=p.id, lat=p.lat, lon=p.lon, severity=severity_label(p.severity))
                     for p in route.potholes_encountered
                 ],
+                directions=[
+                    dict(instruction=s.instruction, maneuver=s.maneuver, street=s.street,
+                         distance_m=s.distance_m, lat=s.lat, lon=s.lon)
+                    for s in route.directions
+                ],
             )
 
         return dict(

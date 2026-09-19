@@ -15,6 +15,7 @@ from alert_service.alert_math import PotholeReport
 from alert_service.potholes import severity_label
 
 from .cost import ROUTE_COST_ATTR, EdgeKey, RoutingConfig, apply_edge_exposure_to_costs, snap_potholes_to_edges
+from .directions import DirectionStep, build_directions
 
 # (label, avoidance_weight) pairs computed by default. A route identical to an
 # already-listed one (same road sequence) is skipped, so the caller may see
@@ -37,6 +38,7 @@ class RouteResult:
     pothole_exposure: float
     potholes_encountered: List[PotholeReport]
     risk_rating: str  # "None" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" -- worst pothole actually on this route
+    directions: List[DirectionStep]
 
 
 def _risk_rating(potholes: List[PotholeReport]) -> str:
@@ -66,6 +68,7 @@ def _build_route_result(graph, label: str, nodes: List, edge_potholes: Dict[Edge
         label=label, nodes=nodes, coords=coords, distance_m=distance_m, duration_s=duration_s,
         pothole_exposure=exposure, potholes_encountered=potholes_encountered,
         risk_rating=_risk_rating(potholes_encountered),
+        directions=build_directions(graph, nodes),
     )
 
 

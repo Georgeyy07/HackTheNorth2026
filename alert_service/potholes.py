@@ -49,6 +49,26 @@ def severity_label(score: float) -> str:
     return "LOW"
 
 
+# Candidate names the live Postgres severity column has actually gone by
+# this session (it's been renamed twice already -- someone else is actively
+# iterating on this schema). Checked against information_schema each call so
+# a future rename doesn't require another code change here, just adding the
+# new name to this list.
+POSTGRES_SEVERITY_COLUMN_CANDIDATES = ["severity", "severity_score", "severity_value"]
+
+
+def _find_postgres_severity_column(cursor) -> str:
+    cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'potholes'")
+    existing = {row[0] for row in cursor.fetchall()}
+    for candidate in POSTGRES_SEVERITY_COLUMN_CANDIDATES:
+        if candidate in existing:
+            return candidate
+    raise RuntimeError(
+        f"None of {POSTGRES_SEVERITY_COLUMN_CANDIDATES} found in potholes table; "
+        f"actual columns: {sorted(existing)}. The live schema changed again -- add the new name."
+    )
+
+
 def fetch_active_potholes() -> List[PotholeReport]:
     """Synchronous fetch of every currently-active pothole report. Branches on
     whichever backend road_viewer.tiger_db actually connected to."""
@@ -58,8 +78,10 @@ def fetch_active_potholes() -> List[PotholeReport]:
     cursor = conn.cursor()
     try:
         if tiger_db.USE_POSTGRES:
-            cursor.execute("SELECT id, latitude, longitude, severity_score FROM potholes WHERE is_active = true")
+            severity_column = _find_postgres_severity_column(cursor)
+            cursor.execute(f"SELECT id, latitude, longitude, {severity_column} FROM potholes WHERE is_active = true")
             rows = cursor.fetchall()
+            # Assumes a 0-10 scale (true for every name this column has had so far).
             return [
                 PotholeReport(id=str(pid), lat=lat, lon=lon, severity=min(1.0, max(0.0, score / 10.0)))
                 for pid, lat, lon, score in rows
