@@ -3,7 +3,7 @@ import { AppState, Platform } from 'react-native';
 import { Accelerometer, Gyroscope } from 'expo-sensors';
 import * as Location from 'expo-location';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { createRecordingSink, listRecordings } from './files';
+import { createRecordingSink, listRecordings, recordingTag } from './files';
 import { RecordingSession } from './session';
 
 export function useMotionRecorder() {
@@ -30,7 +30,7 @@ export function useMotionRecorder() {
       try { active.session.close(reason); } catch (err) {
         if (mounted.current) setError(`Recording write failed: ${err.message}`);
       }
-      deactivateKeepAwake(active.tag).catch(() => {});
+      deactivateKeepAwake(active.keepAwakeTag).catch(() => {});
     }
     if (mounted.current) {
       setStatus('idle');
@@ -52,7 +52,7 @@ export function useMotionRecorder() {
     };
   }, [refresh, stop]);
 
-  const start = useCallback(async (matrix) => {
+  const start = useCallback(async (matrix, videoTag = recordingTag()) => {
     if (current.current) return;
     const token = ++generation.current;
     const valid = () => mounted.current && generation.current === token;
@@ -70,11 +70,11 @@ export function useMotionRecorder() {
       const locationPermission = await Location.requestForegroundPermissionsAsync();
       if (!valid()) return;
       if (!locationPermission.granted) throw new Error('Location permission is required to record GPS speed.');
-      const sink = createRecordingSink();
+      const sink = createRecordingSink(videoTag);
       let session;
       try { session = new RecordingSession({ sink, platform: Platform.OS, matrix }); }
       catch (err) { sink.close(); throw err; }
-      const active = { session, subscriptions: [], tag: `motion-${token}`, timer: null };
+      const active = { session, subscriptions: [], keepAwakeTag: `motion-${token}`, timer: null };
       current.current = active;
       const guard = (fn) => (...args) => {
         if (!valid()) return;
@@ -101,13 +101,15 @@ export function useMotionRecorder() {
       );
       if (!valid()) { location.remove(); return; }
       active.subscriptions.push(location);
-      await activateKeepAwakeAsync(active.tag);
-      if (!valid()) { await deactivateKeepAwake(active.tag); return; }
+      await activateKeepAwakeAsync(active.keepAwakeTag);
+      if (!valid()) { await deactivateKeepAwake(active.keepAwakeTag); return false; }
       setStatus('recording');
+      return true;
     } catch (err) {
-      if (!valid()) return;
+      if (!valid()) return false;
       setError(err.message);
       stop('start-error');
+      return false;
     }
   }, [stop]);
 
@@ -127,5 +129,5 @@ export function useMotionRecorder() {
     }
   }, [stop]);
 
-  return { status, error, live, recordings, start, stop, calibrate };
+  return { status, error, live, recordings, start, stop, calibrate, refresh };
 }

@@ -18,6 +18,7 @@ export class RecordingSession {
       stabilized: 'earthAccel includes gravity; earthGyro is rad/s. Both use quaternion device-to-earth, Z up, arbitrary yaw; NOT geographic or vehicle XY.',
       model: 'input is [vehicle accel_x, accel_y, accel_z, speed], with gravity; gyro uses the same fixed mount. Missing speed is null with mask=false.',
       timestamps: 'raw event.timestamp and stabilized.time are sensor monotonic seconds; location.timestamp and availableAt/receivedAt are Unix milliseconds. Speed is held at availability, not source-time interpolated.',
+      speed: 'When the GPS fix reports no speed field, it is derived from the haversine distance between consecutive fixes divided by their time gap; stabilized.speedDerived flags this (true = derived, false = reported by the device, null = no fresh fix).',
     });
   }
 

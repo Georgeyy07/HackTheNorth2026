@@ -5,6 +5,7 @@ import { BasicVQF, conjugate, norm, rotate } from '../src/motion/vqf.js';
 import { accelerationSI, GRAVITY, matrixRotate, mountMatrix } from '../src/motion/vehicle.js';
 import { MotionPipeline } from '../src/motion/pipeline.js';
 import { RecordingSession } from '../src/motion/session.js';
+import { haversineDistanceM } from '../src/navigation.js';
 
 const near = (a, b, tolerance = 1e-8) => {
   assert.equal(a.length, b.length);
@@ -112,13 +113,35 @@ test('speed stays in m/s; stale, invalid, and future fixes never become measured
   assert.equal(p.latest.input[3], null);
   assert.equal(p.latest.mask[3], false);
   p.setLocation({ timestamp: 100000, coords: { speed: 7 } }, 100000);
-  assert.equal(p.speedAt(103000), 7);
-  assert.equal(p.speedAt(103001), null);
+  assert.equal(p.speedAt(106000), 7);
+  assert.equal(p.speedAt(106001), null);
   assert.equal(p.speedAt(99999), null);
   p.setLocation({ timestamp: 100010, coords: { speed: -1 } }, 100010);
   assert.equal(p.speedAt(100010), null);
   p.setLocation({ timestamp: 100020, coords: { speed: 0 } }, 100020);
   assert.equal(p.speedAt(100020), 0);
+});
+
+test('missing device speed is derived from consecutive GPS fixes, not lost or zeroed', () => {
+  const p = new MotionPipeline();
+  const start = { latitude: 43.4643, longitude: -80.5204 };
+  const end = { latitude: 43.4653, longitude: -80.5204 };
+  const distanceM = haversineDistanceM(start.latitude, start.longitude, end.latitude, end.longitude);
+  // No speed field at all, as many chipsets report.
+  p.setLocation({ timestamp: 100000, coords: { ...start } }, 100000);
+  assert.equal(p.speedAt(100000), null);
+  p.setLocation({ timestamp: 102000, coords: { ...end } }, 102000);
+  assert.ok(Math.abs(p.speedAt(102000)-distanceM/2) < 1e-6);
+  assert.equal(p.speedFix.derived, true);
+  // A device-reported speed always wins over derivation.
+  p.setLocation({ timestamp: 103000, coords: { ...end, speed: 3 } }, 103000);
+  assert.equal(p.speedAt(103000), 3);
+  assert.equal(p.speedFix.derived, false);
+  // Too short a gap between fixes must not amplify GPS jitter into a speed spike.
+  const jitter = new MotionPipeline();
+  jitter.setLocation({ timestamp: 200000, coords: { ...start } }, 200000);
+  jitter.setLocation({ timestamp: 200100, coords: { ...end } }, 200100);
+  assert.equal(jitter.speedAt(200100), null);
 });
 
 test('parked VQF calibration corrects a tilted mount and freezes the body-frame transform', () => {
