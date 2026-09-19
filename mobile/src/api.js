@@ -45,7 +45,8 @@ export function deletePothole(id) {
   return request(`/api/potholes/${id}`, { method: 'DELETE' });
 }
 
-export function getRoute(origin, destination) {
+export function getRoute(origin, destination, avoidanceWeight) {
   const params = new URLSearchParams({ origin, destination });
+  if (avoidanceWeight !== undefined) params.set('avoidance_weight', String(avoidanceWeight));
   return request(`/api/route?${params.toString()}`);
 }

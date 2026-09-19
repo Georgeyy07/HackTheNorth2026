@@ -37,6 +37,7 @@ def test_zero_avoidance_weight_matches_pure_shortest_path():
     result = find_routes(
         graph, "A", "D", [pothole_at_b],
         presets=[("efficient", 0.0), ("pothole_aware", 0.0)],
+        min_routes=1,  # disable the auto-fill so this test checks preset collapsing in isolation
     )
     routes = routes_by_label(result)
 
@@ -98,6 +99,23 @@ def test_find_routes_returns_multiple_distinct_options_for_the_user_to_pick():
     # Fastest and Avoid potholes must actually differ, or there's nothing to pick between
     node_sequences = {tuple(r.nodes) for r in result["routes"]}
     assert len(node_sequences) == len(result["routes"])
+
+
+def test_no_nearby_potholes_still_fills_in_real_alternate_routes():
+    # With nothing to avoid, all three presets pick the same road (A-B-D) and
+    # would collapse to one route -- but the UI wants a real 2nd/3rd option to
+    # show, so a genuinely different path (A-C-D) should be pulled in instead
+    # of silently returning just one route.
+    graph = build_diamond_graph()
+
+    result = find_routes(graph, "A", "D", [], config=RoutingConfig())
+
+    assert len(result["routes"]) == 2  # only two distinct paths exist in this graph at all
+    assert result["routes"][0].nodes == ["A", "B", "D"]  # fastest first
+    assert result["routes"][1].nodes == ["A", "C", "D"]
+    assert result["routes"][1].label == "Alternate 2"
+    # sorted fastest-first by real ETA
+    assert result["routes"][0].duration_s < result["routes"][1].duration_s
 
 
 def test_unmatched_potholes_are_reported_separately():

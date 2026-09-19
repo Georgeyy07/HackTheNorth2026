@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,13 +10,18 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 
 import { getRoute } from '../api';
 import { TurnByTurnTracker } from '../navigation';
 
-const ROUTE_COLORS = ['#ff4d6d', '#00f2fe', '#ffb454', '#a78bfa'];
+// Routes are already returned fastest-first by the backend, so index == rank.
+// Rank is shown as shades of the same red (darkest = fastest), not different
+// hues, so it reads as "same family of options, ranked" rather than
+// unrelated route colors.
+const ROUTE_SHADES = ['#ff2d55', '#ff8095', '#ffc2cc'];
 const RISK_COLORS = { None: '#159c78', LOW: '#caaa50', MEDIUM: '#e78043', HIGH: '#c95268', CRITICAL: '#8b1e3f' };
 
 function toLatLng(coords) {
@@ -27,9 +32,20 @@ async function announce(title, body) {
   await Notifications.scheduleNotificationAsync({ content: { title, body }, trigger: null });
 }
 
+const MAX_POTHOLE_CARE = 15;
+
+function potholeCareLabel(value) {
+  if (value <= 0) return "Don't care -- fastest route only";
+  if (value <= 4) return 'A little';
+  if (value <= 9) return 'Balanced';
+  if (value <= 13) return 'A lot';
+  return 'Avoid at all costs';
+}
+
 export default function RouteFinderScreen() {
   const [origin, setOrigin] = useState('University of Waterloo, Waterloo, ON');
   const [destination, setDestination] = useState('Waterloo Public Square, Waterloo, ON');
+  const [potholeCare, setPotholeCare] = useState(3);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
@@ -40,14 +56,19 @@ export default function RouteFinderScreen() {
   const [userLocation, setUserLocation] = useState(null);
   const trackerRef = useRef(null);
   const subscriptionRef = useRef(null);
+  const mapRef = useRef(null);
 
   const handleFindRoutes = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await getRoute(origin, destination);
+      const data = await getRoute(origin, destination, potholeCare);
       setResult(data);
-      setSelectedIndex(0);
+      // Default to the route that actually reflects the user's slider choice,
+      // not just whichever sorted first -- falls back to index 0 (Fastest)
+      // if "Recommended" collapsed into it (e.g. slider at 0).
+      const recommendedIndex = data.routes.findIndex((r) => r.label === 'Recommended');
+      setSelectedIndex(recommendedIndex >= 0 ? recommendedIndex : 0);
     } catch (err) {
       setError(err.message);
       setResult(null);
@@ -55,6 +76,21 @@ export default function RouteFinderScreen() {
       setLoading(false);
     }
   };
+
+  // Fit the map to the whole route once results arrive. Using an imperative
+  // fit here (rather than a controlled `region` prop recomputed every
+  // render) avoids fighting the map's own gesture/zoom state -- a `region`
+  // prop that's a fresh object on every render forces the native map to
+  // re-center constantly, which on iOS can suppress overlay rendering.
+  useEffect(() => {
+    if (result && result.routes.length > 0 && mapRef.current) {
+      const allCoords = result.routes.flatMap((r) => toLatLng(r.coords));
+      mapRef.current.fitToCoordinates(allCoords, {
+        edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
+        animated: true,
+      });
+    }
+  }, [result]);
 
   const stopNavigation = useCallback(() => {
     subscriptionRef.current?.remove();
@@ -111,9 +147,12 @@ export default function RouteFinderScreen() {
     );
   };
 
-  const initialRegion = result
-    ? { latitude: result.origin.lat, longitude: result.origin.lon, latitudeDelta: 0.05, longitudeDelta: 0.05 }
-    : { latitude: 43.4723, longitude: -80.5449, latitudeDelta: 0.05, longitudeDelta: 0.05 };
+  const initialRegion = {
+    latitude: result?.origin.lat ?? 43.4723,
+    longitude: result?.origin.lon ?? -80.5449,
+    latitudeDelta: 0.05,
+    longitudeDelta: 0.05,
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -139,6 +178,28 @@ export default function RouteFinderScreen() {
           onChangeText={setDestination}
           editable={!navigating}
         />
+
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderLabel}>How much do you care about potholes?</Text>
+          <Text style={styles.sliderValue}>{potholeCareLabel(potholeCare)}</Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={MAX_POTHOLE_CARE}
+          step={1}
+          value={potholeCare}
+          onValueChange={setPotholeCare}
+          disabled={navigating}
+          minimumTrackTintColor="#ff2d55"
+          maximumTrackTintColor="#374151"
+          thumbTintColor="#ff2d55"
+        />
+        <View style={styles.sliderEndLabels}>
+          <Text style={styles.sliderEndLabel}>Fastest</Text>
+          <Text style={styles.sliderEndLabel}>Avoid potholes</Text>
+        </View>
+
         <TouchableOpacity style={styles.button} onPress={handleFindRoutes} disabled={loading || navigating}>
           {loading ? <ActivityIndicator color="#0b0f19" /> : <Text style={styles.buttonText}>Find routes</Text>}
         </TouchableOpacity>
@@ -161,16 +222,19 @@ export default function RouteFinderScreen() {
       )}
 
       <View style={styles.mapContainer}>
-        <MapView provider={PROVIDER_DEFAULT} style={styles.map} region={initialRegion}>
-          {result && result.routes.map((route, i) => (
-            <Polyline
-              key={route.label}
-              coordinates={toLatLng(route.coords)}
-              strokeColor={ROUTE_COLORS[i % ROUTE_COLORS.length]}
-              strokeWidth={i === selectedIndex ? 6 : 3}
-              zIndex={i === selectedIndex ? 10 : 1}
-            />
-          ))}
+        <MapView ref={mapRef} provider={PROVIDER_DEFAULT} style={styles.map} initialRegion={initialRegion}>
+          {/* Draw worse-ranked (lighter) routes first, best route last, so it renders on top */}
+          {result && [...result.routes]
+            .map((route, i) => ({ route, i }))
+            .sort((a, b) => (a.i === selectedIndex ? 1 : b.i === selectedIndex ? -1 : b.i - a.i))
+            .map(({ route, i }) => (
+              <Polyline
+                key={route.label}
+                coordinates={toLatLng(route.coords)}
+                strokeColor={ROUTE_SHADES[i] || ROUTE_SHADES[ROUTE_SHADES.length - 1]}
+                strokeWidth={i === selectedIndex ? 6 : 4}
+              />
+            ))}
           {result && (
             <>
               <Marker coordinate={{ latitude: result.origin.lat, longitude: result.origin.lon }} title="Origin" pinColor="dodgerblue" />
@@ -208,7 +272,7 @@ export default function RouteFinderScreen() {
                 key={route.label}
                 style={[
                   styles.routeCard,
-                  { borderLeftColor: ROUTE_COLORS[i % ROUTE_COLORS.length] },
+                  { borderLeftColor: ROUTE_SHADES[i] || ROUTE_SHADES[ROUTE_SHADES.length - 1] },
                   i === selectedIndex && styles.routeCardSelected,
                 ]}
                 onPress={() => !navigating && setSelectedIndex(i)}
@@ -220,7 +284,7 @@ export default function RouteFinderScreen() {
                     <Text style={[styles.riskBadgeText, { color: riskColor }]}>{route.risk_rating} risk</Text>
                   </View>
                 </View>
-                <Text style={styles.routeMeta}>{Math.round(route.distance_m)}m · {mins}m {secs}s · {route.directions.length} turns</Text>
+                <Text style={styles.routeMeta}>{Math.round(route.distance_m)}m · ETA {mins}m {secs}s · {route.directions.length} turns</Text>
                 <Text style={styles.routePotholes}>Potholes: {potholeList}</Text>
               </TouchableOpacity>
             );
@@ -247,6 +311,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#1f2937', borderColor: '#374151', borderWidth: 1, borderRadius: 8,
     padding: 12, color: '#fff', fontSize: 13, marginBottom: 8,
   },
+  sliderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  sliderLabel: { color: '#9ca3af', fontSize: 11, flex: 1 },
+  sliderValue: { color: '#ff2d55', fontSize: 11, fontWeight: '700' },
+  slider: { width: '100%', height: 32 },
+  sliderEndLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: -4, marginBottom: 8 },
+  sliderEndLabel: { color: '#6b7280', fontSize: 9 },
   button: { backgroundColor: '#00f2fe', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 8 },
   buttonText: { color: '#0b0f19', fontWeight: '700', fontSize: 13 },
   errorBanner: { marginHorizontal: 16, backgroundColor: '#7f1d1d', borderRadius: 8, padding: 10, marginBottom: 8 },

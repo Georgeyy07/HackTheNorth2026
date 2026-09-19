@@ -72,6 +72,22 @@ def _build_route_result(graph, label: str, nodes: List, edge_potholes: Dict[Edge
     )
 
 
+def _simple_graph_view(graph) -> nx.DiGraph:
+    """A plain DiGraph with one edge per (u, v), keeping the minimum travel_time
+    among any parallel multigraph edges. Only used to search for alternate
+    paths (nx.shortest_simple_paths doesn't support multigraphs); the actual
+    RouteResult is still built from the original graph's real edges."""
+    simple = nx.DiGraph()
+    simple.add_nodes_from(graph.nodes)
+    for u, v, data in graph.edges(data=True):
+        weight = data.get("travel_time", data.get("length", 0.0))
+        if simple.has_edge(u, v):
+            simple[u][v]["travel_time"] = min(simple[u][v]["travel_time"], weight)
+        else:
+            simple.add_edge(u, v, travel_time=weight)
+    return simple
+
+
 def find_routes(
     graph,
     origin_node,
@@ -79,12 +95,20 @@ def find_routes(
     potholes: Iterable[PotholeReport],
     presets: List[Tuple[str, float]] = DEFAULT_PRESETS,
     config: RoutingConfig = RoutingConfig(),
+    min_routes: int = 3,
 ) -> dict:
-    """Returns {'routes': [RouteResult, ...], 'unmatched_potholes': [...]} --
-    one RouteResult per preset in `presets` (skipping any that land on a road
-    sequence identical to one already returned), each carrying real distance,
-    ETA, and the actual PotholeReports it passes with a worst-case risk_rating.
-    `unmatched_potholes` lists reports too far from any road to route around.
+    """Returns {'routes': [RouteResult, ...], 'unmatched_potholes': [...]}, sorted
+    fastest-first. One RouteResult per preset in `presets` (skipping any that
+    land on a road sequence identical to one already returned), each carrying
+    real distance, ETA, and the actual PotholeReports it passes with a
+    worst-case risk_rating. `unmatched_potholes` lists reports too far from
+    any road to route around.
+
+    If the presets collapse to fewer than `min_routes` distinct roads (nothing
+    nearby to avoid, so "Balanced"/"Avoid potholes" land on the same street as
+    "Fastest"), real alternate routes are pulled in via Yen's algorithm
+    (nx.shortest_simple_paths) so the caller always has something to show as
+    a 2nd/3rd option, rather than silently returning just one.
     """
     potholes = list(potholes)
     edge_potholes, unmatched = snap_potholes_to_edges(graph, potholes, config)
@@ -102,4 +126,24 @@ def find_routes(
         seen_node_sequences.add(node_sequence)
         results.append(_build_route_result(graph, label, nodes, edge_potholes))
 
+    if len(results) < min_routes:
+        try:
+            # shortest_simple_paths (Yen's algorithm) doesn't support multigraphs;
+            # search over a simple-graph view (min travel_time per node pair) and
+            # build the actual RouteResult from the real multigraph via the
+            # resulting node sequence, which works on either graph type.
+            simple_graph = _simple_graph_view(graph)
+            path_generator = nx.shortest_simple_paths(simple_graph, origin_node, destination_node, weight="travel_time")
+            for nodes in path_generator:
+                node_sequence = tuple(nodes)
+                if node_sequence in seen_node_sequences:
+                    continue
+                seen_node_sequences.add(node_sequence)
+                results.append(_build_route_result(graph, f"Alternate {len(results) + 1}", nodes, edge_potholes))
+                if len(results) >= min_routes:
+                    break
+        except nx.NetworkXNoPath:
+            pass
+
+    results.sort(key=lambda r: r.duration_s)
     return {"routes": results, "unmatched_potholes": unmatched}

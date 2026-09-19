@@ -194,7 +194,8 @@ def create_app(export=None, filters=None):
         return {"status": "ok", "potholes": get_potholes()}
 
     @app.get("/api/route")
-    def compute_route(origin: str, destination: str, place: str = "Waterloo, Ontario, Canada"):
+    def compute_route(origin: str, destination: str, place: str = "Waterloo, Ontario, Canada",
+                       avoidance_weight: float = 3.0):
         try:
             origin_lat, origin_lon = geocode_address(origin)
             dest_lat, dest_lon = geocode_address(destination)
@@ -207,8 +208,16 @@ def create_app(export=None, filters=None):
 
         potholes = fetch_active_potholes()
 
+        # "Fastest" (0) and "Max avoidance" (15, a strong fixed ceiling) stay as
+        # reference points; "Recommended" is exactly the caller's dial, so
+        # turning it up/down directly changes how hard that middle option
+        # avoids potholes vs. chasing ETA. All three collapse toward "Fastest"
+        # as avoidance_weight -> 0, at which point find_routes backfills real
+        # alternate routes instead of returning duplicates.
+        presets = [("Fastest", 0.0), ("Recommended", avoidance_weight), ("Max avoidance", 15.0)]
+
         try:
-            result = find_routes(graph, origin_node, dest_node, potholes, config=RoutingConfig())
+            result = find_routes(graph, origin_node, dest_node, potholes, presets=presets, config=RoutingConfig())
         except Exception as exc:
             raise HTTPException(400, f"No route found: {exc}")
 
