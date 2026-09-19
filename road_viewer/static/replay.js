@@ -77,7 +77,8 @@ export class Replay {
 }
 
 export function clock(seconds, decimal = false) {
-  const value = Math.max(0, seconds);
+  const num = Number(seconds);
+  const value = (!Number.isFinite(num) || num < 0) ? 0 : num;
   const minutes = Math.floor(value / 60);
   const rest = Math.floor(value % 60).toString().padStart(2, '0');
   return `${minutes.toString().padStart(2, '0')}:${rest}${decimal ? '.' + Math.floor((value % 1) * 10) : ''}`;

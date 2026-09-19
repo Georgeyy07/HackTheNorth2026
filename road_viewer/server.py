@@ -7,11 +7,20 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+
+import sys
+
+# Ensure repository root is in sys.path when executed directly as a script
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
 
 
 HERE = Path(__file__).resolve().parent
@@ -30,11 +39,50 @@ def read(path):
     return json.loads(path.read_text())
 
 
+def ensure_default_export(export_dir: Path):
+    if (export_dir / "manifest.json").is_file():
+        return
+    export_dir.mkdir(parents=True, exist_ok=True)
+    import numpy as np
+    import pandas as pd
+    sessions = []
+    for name, count, lat, lng in [
+        ('kaggle_fixture', 500, 43.4723, -80.5449),
+        ('lira_fixture', 300, 39.6180, 22.4280)
+    ]:
+        folder = export_dir / name
+        folder.mkdir(parents=True, exist_ok=True)
+        frame = pd.DataFrame({key: np.arange(count, dtype=float) / 100 for key in SIGNALS})
+        if name.startswith('lira'):
+            frame[['gyro_x', 'gyro_y', 'gyro_z']] = np.nan
+        frame.to_parquet(folder / 'samples.parquet', index=False)
+        pd.DataFrame({
+            'time_s': [0.0, count / 200.0, count / 100.0],
+            'latitude_deg': [lat, lat + 0.002, lat + 0.004],
+            'longitude_deg': [lng, lng + 0.002, lng + 0.004]
+        }).to_parquet(folder / 'gps_fixes.parquet', index=False)
+        with gzip.open(folder / 'updates.jsonl.gz', 'wt') as handle:
+            for patch in range(max(1, count // 16)):
+                handle.write(json.dumps(dict(
+                    target_patch=patch, start_s=patch*0.16, end_s=(patch+1)*0.16,
+                    available_s=(patch+1)*0.16 + 0.32, probability=0.75 if patch % 5 == 0 else 0.1,
+                    disturbance=patch % 5 == 0, is_final=True, iri_m_per_km=2.5,
+                    target_latitude_deg=lat, target_longitude_deg=lng
+                )) + '\n')
+        sessions.append(dict(session_id=name, samples=count, duration_s=count / 100,
+                             dataset=name.split('_')[0], timestamp_origin_unix_ns="1696680000000000000"))
+    manifest = dict(sessions=sessions, samples=800, duration_s=8.0)
+    (export_dir / 'manifest.json').write_text(json.dumps(manifest))
+
+
 def create_app(export=None, filters=None):
+    export_given = export is not None or "ROAD_VIEWER_EXPORT" in os.environ
     export = Path(export or os.environ.get("ROAD_VIEWER_EXPORT", EXPORT)).resolve()
     filters = Path(filters or os.environ.get("ROAD_VIEWER_FILTERS", FILTERS)).resolve()
     if not (export / "manifest.json").is_file():
-        raise FileNotFoundError(f"No replay manifest in {export}. Set --export or ROAD_VIEWER_EXPORT.")
+        if export_given:
+            raise FileNotFoundError(f"No replay manifest in {export}. Set --export or ROAD_VIEWER_EXPORT.")
+        ensure_default_export(export)
     manifest = read(export / "manifest.json")
     sessions = {s["session_id"]: s for s in manifest["sessions"]}
     profile_file = filters / "viewer_profiles.json"
@@ -75,11 +123,55 @@ def create_app(export=None, filters=None):
                       sample_rate_hz=100, gps_max_age_s=3.)
         return json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
 
+    # Initialize Tiger Data database
+    try:
+        init_db()
+        seed_sample_potholes()
+    except Exception as e:
+        pass
+
     @app.get("/api/catalog")
     def catalog():
         return dict(sessions=list(sessions.values()), total_samples=manifest["samples"],
                     duration_s=manifest["duration_s"], patch_ms=160, delay_ms=320,
                     tile_url="https://tile.openstreetmap.org/{z}/{x}/{y}.png", profiles=profiles, default_profile="original")
+
+    @app.get("/api/potholes")
+    def list_potholes(severity: str = None):
+        return get_potholes(severity=severity)
+
+    @app.post("/api/potholes")
+    def create_pothole(payload: dict = Body(...)):
+        if "latitude" not in payload or "longitude" not in payload:
+            raise HTTPException(400, "Latitude and Longitude are required")
+        new_record = add_pothole(
+            latitude=float(payload["latitude"]),
+            longitude=float(payload["longitude"]),
+            severity=str(payload.get("severity", "MEDIUM"))
+        )
+        return new_record
+
+    @app.put("/api/potholes/{pothole_id}")
+    def modify_pothole(pothole_id: int, payload: dict = Body(...)):
+        success = update_pothole(
+            pothole_id=pothole_id,
+            severity=payload.get("severity")
+        )
+        if not success:
+            raise HTTPException(404, "Pothole not found or no changes made")
+        return {"status": "ok", "id": pothole_id}
+
+    @app.delete("/api/potholes/{pothole_id}")
+    def remove_pothole(pothole_id: int):
+        success = delete_pothole(pothole_id)
+        if not success:
+            raise HTTPException(404, "Pothole not found")
+        return {"status": "ok", "deleted_id": pothole_id}
+
+    @app.post("/api/potholes/seed")
+    def seed_potholes():
+        seed_sample_potholes()
+        return {"status": "ok", "potholes": get_potholes()}
 
     @app.get("/api/session/{session_id}")
     def session_data(session_id: str, profile: str = "original"):
