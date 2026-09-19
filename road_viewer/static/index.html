@@ -98,11 +98,13 @@
             <span class="db-tech-tag">Efficiency vs potholes</span>
           </div>
           <form id="route-form" class="pothole-form">
-            <div class="form-row">
-              <input type="text" id="route-origin" placeholder="Origin address" required>
+            <div class="form-row" style="position:relative">
+              <input type="text" id="route-origin" placeholder="Origin address" required autocomplete="off">
+              <div id="route-origin-suggestions" class="address-suggestions" hidden></div>
             </div>
-            <div class="form-row">
-              <input type="text" id="route-destination" placeholder="Destination address" required>
+            <div class="form-row" style="position:relative">
+              <input type="text" id="route-destination" placeholder="Destination address" required autocomplete="off">
+              <div id="route-destination-suggestions" class="address-suggestions" hidden></div>
             </div>
             <div class="form-buttons">
               <button type="submit" class="tiger-btn primary">Find routes</button>

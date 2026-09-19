@@ -50,3 +50,8 @@ export function getRoute(origin, destination, avoidanceWeight) {
   if (avoidanceWeight !== undefined) params.set('avoidance_weight', String(avoidanceWeight));
   return request(`/api/route?${params.toString()}`);
 }
+
+export function suggestAddresses(query) {
+  const params = new URLSearchParams({ q: query });
+  return request(`/api/geocode/suggest?${params.toString()}`);
+}

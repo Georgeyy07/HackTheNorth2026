@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import List, TypedDict
 
 import osmnx as ox
+import requests
 
 from alert_service.alert_math import EARTH_RADIUS_M, haversine_distance_m
 
@@ -97,6 +99,61 @@ def geocode_address(address: str) -> tuple[float, float]:
         return ox.geocode(address)
     except Exception as exc:  # osmnx raises its own InsufficientResponseError etc.
         raise ValueError(f"Could not geocode address: {address!r}") from exc
+
+
+class AddressSuggestion(TypedDict):
+    display_name: str
+    lat: float
+    lon: float
+
+
+_GEOCODER_USER_AGENT = "HackTheNorth2026-RoughRoute/1.0 (hackathon project; contact via GitHub)"
+
+
+def _format_photon_name(properties: dict) -> str:
+    parts = [properties.get(k) for k in ("name", "street", "city", "state", "country")]
+    # Drop consecutive duplicates (e.g. name == city for a city-level result).
+    deduped: List[str] = []
+    for part in parts:
+        if part and (not deduped or part != deduped[-1]):
+            deduped.append(part)
+    return ", ".join(deduped)
+
+
+def suggest_addresses(query: str, limit: int = 5) -> List[AddressSuggestion]:
+    """Returns up to `limit` candidate addresses/places matching a partial
+    query, for autocomplete-as-you-type. Uses Photon (Komoot's free,
+    OSM-data-backed geocoder built for exactly this) rather than Nominatim's
+    /search -- Nominatim's usage policy explicitly forbids "search as you
+    type"/autocomplete use, and its full-text search isn't prefix-matching
+    anyway (querying "University of Wat" against Nominatim returns an
+    unrelated Polish military academy, not Waterloo; Photon returns
+    University of Waterloo as the top hit). Returns [] on any network error
+    or empty result -- callers shouldn't treat "no suggestions yet" as an
+    error worth surfacing to the user while they're mid-typing."""
+    query = query.strip()
+    if len(query) < 3:
+        return []
+    try:
+        response = requests.get(
+            "https://photon.komoot.io/api/",
+            params={"q": query, "limit": limit},
+            headers={"User-Agent": _GEOCODER_USER_AGENT},
+            timeout=8,
+        )
+        response.raise_for_status()
+        features = response.json().get("features", [])
+    except requests.RequestException:
+        return []
+
+    return [
+        {
+            "display_name": _format_photon_name(f["properties"]),
+            "lon": f["geometry"]["coordinates"][0],
+            "lat": f["geometry"]["coordinates"][1],
+        }
+        for f in features
+    ]
 
 
 def nearest_node(graph, lat: float, lon: float):

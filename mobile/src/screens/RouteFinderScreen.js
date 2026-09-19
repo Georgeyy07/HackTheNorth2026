@@ -2,7 +2,6 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
@@ -16,6 +15,7 @@ import * as Notifications from 'expo-notifications';
 
 import { getRoute } from '../api';
 import { TurnByTurnTracker } from '../navigation';
+import AddressInput from '../components/AddressInput';
 
 // Routes are already returned fastest-first by the backend, so index == rank.
 // Rank is shown as shades of the same red (darkest = fastest), not different
@@ -162,18 +162,14 @@ export default function RouteFinderScreen() {
       </View>
 
       <View style={styles.form}>
-        <TextInput
-          style={styles.input}
+        <AddressInput
           placeholder="Origin address"
-          placeholderTextColor="#6b7280"
           value={origin}
           onChangeText={setOrigin}
           editable={!navigating}
         />
-        <TextInput
-          style={styles.input}
+        <AddressInput
           placeholder="Destination address"
-          placeholderTextColor="#6b7280"
           value={destination}
           onChangeText={setDestination}
           editable={!navigating}
@@ -307,10 +303,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 20, fontWeight: '700', color: '#00f2fe' },
   subtitle: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
   form: { paddingHorizontal: 16, gap: 8 },
-  input: {
-    backgroundColor: '#1f2937', borderColor: '#374151', borderWidth: 1, borderRadius: 8,
-    padding: 12, color: '#fff', fontSize: 13, marginBottom: 8,
-  },
   sliderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
   sliderLabel: { color: '#9ca3af', fontSize: 11, flex: 1 },
   sliderValue: { color: '#ff2d55', fontSize: 11, fontWeight: '700' },

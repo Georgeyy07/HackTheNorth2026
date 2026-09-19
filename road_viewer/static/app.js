@@ -195,6 +195,57 @@ function formatRoute(route, index, color) {
     `<div class="pothole-footer"><span>${route.pothole_count} pothole${route.pothole_count === 1 ? '' : 's'}: ${potholeList}</span></div></div>`;
 }
 
+function setupAddressAutocomplete(inputId, suggestionsId) {
+  const input = $(inputId), box = $(suggestionsId);
+  if (!input || !box) return;
+  let debounceTimer = null, requestId = 0;
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const query = input.value.trim();
+    if (query.length < 3) {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    debounceTimer = setTimeout(async () => {
+      const thisRequest = ++requestId;
+      try {
+        const res = await fetch(`/api/geocode/suggest?q=${encodeURIComponent(query)}`);
+        const results = await res.json();
+        if (thisRequest !== requestId) return;
+        box.replaceChildren();
+        if (!results.length) {
+          box.hidden = true;
+          return;
+        }
+        results.forEach(r => {
+          const item = document.createElement('div');
+          item.className = 'address-suggestion';
+          item.textContent = r.display_name;
+          item.addEventListener('click', () => {
+            input.value = r.display_name;
+            box.hidden = true;
+            box.replaceChildren();
+          });
+          box.append(item);
+        });
+        box.hidden = false;
+      } catch {
+        box.hidden = true;
+      }
+    }, 400);
+  });
+
+  input.addEventListener('blur', () => {
+    // Delay so a click on a suggestion registers before the dropdown hides.
+    setTimeout(() => { box.hidden = true; }, 150);
+  });
+}
+
+setupAddressAutocomplete('route-origin', 'route-origin-suggestions');
+setupAddressAutocomplete('route-destination', 'route-destination-suggestions');
+
 $('route-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const origin = $('route-origin').value.trim();

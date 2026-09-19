@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
 from alert_service.potholes import fetch_active_potholes, severity_label
 from route_planner.cost import RoutingConfig
-from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node
+from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node, suggest_addresses
 from route_planner.router import find_routes
 _ROUTE_GRAPH_CACHE = {}
 
@@ -206,6 +206,10 @@ def create_app(export=None, filters=None):
     def seed_potholes():
         seed_sample_potholes()
         return {"status": "ok", "potholes": get_potholes()}
+
+    @app.get("/api/geocode/suggest")
+    def geocode_suggest(q: str, limit: int = 5):
+        return suggest_addresses(q, limit=limit)
 
     @app.get("/api/route")
     def compute_route(origin: str, destination: str, avoidance_weight: float = 3.0):

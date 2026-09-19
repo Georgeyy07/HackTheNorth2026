@@ -34,6 +34,10 @@
 .pothole-item{background:#152b22;border:1px solid #214739;border-radius:8px;padding:9px;display:flex;flex-direction:column;gap:5px;transition:border-color 0.2s}
 .pothole-item:hover{border-color:#00f2fe}
 .route-option.selected{border-color:#00f2fe;background:#1a3a30}
+.address-suggestions{position:absolute;top:100%;left:0;right:0;z-index:20;background:#1f2937;border:1px solid #374151;border-radius:8px;margin-top:4px;max-height:180px;overflow-y:auto}
+.address-suggestion{padding:8px 10px;font-size:11px;color:#e6f4fe;cursor:pointer;border-bottom:1px solid #374151}
+.address-suggestion:last-child{border-bottom:none}
+.address-suggestion:hover{background:#0d2b22}
 .pothole-item-header{display:flex;justify-content:space-between;align-items:center}
 .pothole-sev-badge{font-size:8px;font-weight:800;padding:2px 6px;border-radius:4px;text-transform:uppercase}
 .pothole-sev-badge.CRITICAL{background:#ff4d6d;color:#fff}
