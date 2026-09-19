@@ -9,6 +9,7 @@ Use **acceleration X/Y/Z + speed**. The current model keeps per-window instance 
 - [Kalman score filter and alert hysteresis](alert_filter.py)
 - [Default postprocessing settings](../configs/timeline.json)
 - [Training guide](../docs/TRAINING.md)
+- [Experimental ordinal roughness model, PVS importer and controlled results](../docs/ORDINAL.md)
 - [Full-drive inference export with timestamps and GPS](export_test_drives.py)
 
 Run from the repository root:

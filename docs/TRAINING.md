@@ -1,5 +1,7 @@
 # Training code guide
 
+The [ordinal roughness study](ORDINAL.md) compares good/medium/bad classification with regression, adds PVS as separate weak supervision, and reports four-seed results. Its model, importer and paired training runner are experimental; the current ensemble below continues to predict IRI.
+
 ## Current augmented instance-normalized model
 
 Start with `instance_model.py` for the encoder/heads, `train_multitask.py` for target reduction and focal + Huber losses, `instance_loss.py` for per-dataset weighting, and `mounting_augmentation.py` for rotation/noise.

@@ -57,6 +57,8 @@ output = model(batch['x'], batch['mask'])
 
 Use [the training guide](docs/TRAINING.md) to find the current augmented recipe, the older supervised baselines, and DropPatch/ArcTan/RCD pretraining. The old generic trainer uses TRAIN statistics; the current ensemble recipe uses per-window instance normalization. These are explicitly different experiment configurations.
 
+The [ordinal roughness experiment](docs/ORDINAL.md) adds a good/medium/bad model and a PVS importer, with paired regression comparisons and four-seed results. It preserves the current deployment while evaluating the limits of physical IRI labels and weak PVS labels.
+
 ## Load weights and replay predictions
 
 The trained four-seed ensemble is included; no retraining or external weight download is needed. Checkpoint hashes and input channel order are checked on load. See [the model card](models/acceleration_speed/README.md).
