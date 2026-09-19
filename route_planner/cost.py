@@ -1,0 +1,139 @@
+"""Turns raw pothole reports into a routing cost that trades off against distance.
+
+Real phone GPS is noisy: a pothole report can land 100+ meters from any real
+road (confirmed against the real Waterloo graph -- a real reported pothole
+sat 178m from the *closest* road edge in the entire city). A fixed
+distance-to-edge cutoff either misses noisy reports like that (buffer too
+tight) or double-counts a pothole near a fork onto multiple edges (buffer
+too loose). Instead, each pothole is snapped to its single nearest road edge
+(the standard GPS map-matching approach) -- and if even the nearest edge is
+farther than `max_snap_distance_m`, the report is treated as unmatched
+(probably a bad GPS fix) rather than silently misapplied to the wrong road.
+
+The graph (from osmnx) has nodes with lat/lon ('y'/'x') and edges with a
+'length' in meters. Snapped exposure is scaled by `penalty_per_severity_m`
+(an equivalent "extra meters" cost per severity unit) and dialed up or down
+with `avoidance_weight` -- 0 ignores potholes entirely (pure shortest path),
+1 applies the full penalty, and values above 1 push harder toward avoidance.
+
+This still approximates each edge as a straight line rather than using OSM's
+true polyline geometry (the 'geometry' attribute, when present) -- fine for
+most segments, but a sharply curved road could still snap incorrectly.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Tuple
+
+from alert_service.alert_math import EARTH_RADIUS_M, PotholeReport
+
+ROUTE_COST_ATTR = "route_cost"
+EdgeKey = Tuple[object, object, object]
+
+
+@dataclass
+class RoutingConfig:
+    max_snap_distance_m: float = 150.0     # beyond this, a pothole is "unmatched" to any road
+    penalty_per_severity_m: float = 500.0  # "extra meters" added per unit severity, before avoidance_weight
+    avoidance_weight: float = 0.5          # 0 = pure shortest path, 1 = full penalty, >1 = stronger avoidance
+
+
+def _to_local_meters(lat: float, lon: float, ref_lat_deg: float) -> Tuple[float, float]:
+    """Equirectangular projection to local (x, y) meters, accurate enough at
+    single-city scale, centered near `ref_lat_deg` to keep the cos() correction local."""
+    x = math.radians(lon) * math.cos(math.radians(ref_lat_deg)) * EARTH_RADIUS_M
+    y = math.radians(lat) * EARTH_RADIUS_M
+    return x, y
+
+
+def _point_to_segment_distance_m(
+    plat: float, plon: float, alat: float, alon: float, blat: float, blon: float
+) -> float:
+    """Shortest distance from point P to the line segment A-B, in meters."""
+    ref_lat = (alat + blat) / 2
+    px, py = _to_local_meters(plat, plon, ref_lat)
+    ax, ay = _to_local_meters(alat, alon, ref_lat)
+    bx, by = _to_local_meters(blat, blon, ref_lat)
+
+    abx, aby = bx - ax, by - ay
+    ab_len_sq = abx * abx + aby * aby
+    if ab_len_sq == 0:
+        t = 0.0
+    else:
+        t = max(0.0, min(1.0, ((px - ax) * abx + (py - ay) * aby) / ab_len_sq))
+    cx, cy = ax + t * abx, ay + t * aby
+    return math.hypot(px - cx, py - cy)
+
+
+def pothole_exposure(lat: float, lon: float, potholes: Iterable[PotholeReport], buffer_m: float) -> float:
+    """Sum of severities for potholes within `buffer_m` of a single point (lat, lon)."""
+    return sum(
+        p.severity
+        for p in potholes
+        if _point_to_segment_distance_m(p.lat, p.lon, lat, lon, lat, lon) <= buffer_m
+    )
+
+
+def snap_potholes_to_edges(
+    graph, potholes: Iterable[PotholeReport], config: RoutingConfig = RoutingConfig()
+) -> Tuple[Dict[EdgeKey, float], List[PotholeReport]]:
+    """Assigns each pothole's severity to its single nearest road edge.
+
+    Returns (edge_exposure, unmatched) where edge_exposure maps (u, v, key) ->
+    summed severity, and unmatched lists potholes farther than
+    `max_snap_distance_m` from every edge -- likely bad GPS fixes, surfaced
+    rather than silently dropped or misapplied.
+    """
+    edges = list(graph.edges(keys=True))
+    edge_exposure: Dict[EdgeKey, float] = {}
+    unmatched: List[PotholeReport] = []
+
+    for pothole in potholes:
+        best_edge = None
+        best_distance = math.inf
+        for u, v, key in edges:
+            d = _point_to_segment_distance_m(
+                pothole.lat, pothole.lon,
+                graph.nodes[u]["y"], graph.nodes[u]["x"],
+                graph.nodes[v]["y"], graph.nodes[v]["x"],
+            )
+            if d < best_distance:
+                best_distance, best_edge = d, (u, v, key)
+
+        if best_edge is None or best_distance > config.max_snap_distance_m:
+            unmatched.append(pothole)
+        else:
+            edge_exposure[best_edge] = edge_exposure.get(best_edge, 0.0) + pothole.severity
+
+    return edge_exposure, unmatched
+
+
+def apply_edge_exposure_to_costs(
+    graph, edge_exposure: Dict[EdgeKey, float], config: RoutingConfig = RoutingConfig()
+) -> None:
+    """Writes a `route_cost` attribute onto every edge of `graph`, in place,
+    from an already-computed edge_exposure map (see `snap_potholes_to_edges`)."""
+    for u, v, key, data in graph.edges(keys=True, data=True):
+        length_m = data.get("length", 0.0)
+        exposure = edge_exposure.get((u, v, key), 0.0)
+        data[ROUTE_COST_ATTR] = length_m + config.avoidance_weight * config.penalty_per_severity_m * exposure
+
+
+def annotate_pothole_costs(
+    graph, potholes: Iterable[PotholeReport], config: RoutingConfig = RoutingConfig()
+) -> List[PotholeReport]:
+    """Writes a `route_cost` attribute onto every edge of `graph`, in place.
+    Returns the list of potholes that couldn't be matched to any nearby road."""
+    edge_exposure, unmatched = snap_potholes_to_edges(graph, potholes, config)
+    apply_edge_exposure_to_costs(graph, edge_exposure, config)
+    return unmatched
+
+
+def pothole_exposure_m(graph, u, v, potholes: Iterable[PotholeReport], config: RoutingConfig) -> float:
+    """Exposure for a single edge (u, v)'s best-matching key, from the full snap assignment.
+    Convenience wrapper for tests/inspection; prefer `annotate_pothole_costs` for routing."""
+    edge_exposure, _ = snap_potholes_to_edges(graph, potholes, config)
+    matches = [exposure for (eu, ev, _), exposure in edge_exposure.items() if eu == u and ev == v]
+    return sum(matches)
