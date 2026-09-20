@@ -2,21 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { Accelerometer, Gyroscope } from 'expo-sensors';
 import * as Location from 'expo-location';
-import { getWebSocketUrl } from '../api';
-import { MotionPipeline } from './pipeline';
-import { mountMatrix, accelerationSI, matrixRotate } from './vehicle';
+import { getWebSocketUrl } from '../api.js';
+import { MotionPipeline } from './pipeline.js';
+import { mountMatrix, accelerationSI, matrixRotate } from './vehicle.js';
+import { BATCH_INTERVAL_MS, DEFAULT_MAX_TILT_DEGREES, shouldStreamImu } from './imuStreamConfig.js';
 
-// 5 times per second (1000ms / 5 = 200ms)
-export const BATCH_INTERVAL_MS = 200;
-export const DEFAULT_MAX_TILT_DEGREES = 20.0;
-
-/**
- * Determines whether IMU data should stream over WebSockets:
- * Must be navigating, and phone tilt angle must NOT exceed 20 degrees.
- */
-export function shouldStreamImu(isNavigating, tiltAngle, maxTiltAngle = DEFAULT_MAX_TILT_DEGREES) {
-  return Boolean(isNavigating && Number.isFinite(tiltAngle) && tiltAngle <= maxTiltAngle);
-}
+export { BATCH_INTERVAL_MS, DEFAULT_MAX_TILT_DEGREES, shouldStreamImu };
 
 export function useImuStreamer({
   defaultUrl = null,

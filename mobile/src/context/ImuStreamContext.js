@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import { useImuStreamer } from '../motion/useImuStreamer';
+import { useImuStreamer } from '../motion/useImuStreamer.js';
 
 const ImuStreamContext = createContext(null);
 

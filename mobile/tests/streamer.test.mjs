@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getWebSocketUrl, API_BASE_URL } from '../src/api.js';
+import { toWebSocketUrl } from '../src/wsUrl.js';
 import { MotionPipeline } from '../src/motion/pipeline.js';
 import { mountMatrix, GRAVITY } from '../src/motion/vehicle.js';
 import {
   BATCH_INTERVAL_MS,
   DEFAULT_MAX_TILT_DEGREES,
   shouldStreamImu,
-} from '../src/motion/useImuStreamer.js';
+} from '../src/motion/imuStreamConfig.js';
 
 test('BATCH_INTERVAL_MS sends data 5 times per second (200ms)', () => {
   assert.equal(BATCH_INTERVAL_MS, 200, 'Batch interval must be 200ms (5 times per second)');
@@ -38,10 +38,10 @@ test('shouldStreamImu streams ONLY when navigating and tilt angle <= 20 degrees'
   assert.equal(shouldStreamImu(true, Infinity), false);
 });
 
-test('getWebSocketUrl converts http/https URLs to ws/wss URLs', () => {
-  const url = getWebSocketUrl('/ws/imu');
-  assert.ok(url.startsWith('ws://') || url.startsWith('wss://'), `Expected ws URL, got: ${url}`);
-  assert.ok(url.endsWith('/ws/imu'), `Expected path /ws/imu, got: ${url}`);
+test('toWebSocketUrl converts http/https URLs to ws/wss URLs', () => {
+  assert.equal(toWebSocketUrl('http://192.168.1.1:8765', '/ws/imu'), 'ws://192.168.1.1:8765/ws/imu');
+  assert.equal(toWebSocketUrl('https://example.com:8765', '/ws/imu'), 'wss://example.com:8765/ws/imu');
+  assert.equal(toWebSocketUrl('http://localhost:8765', 'ws/imu'), 'ws://localhost:8765/ws/imu');
 });
 
 test('MotionPipeline generates 100Hz samples with latitude and longitude', () => {
