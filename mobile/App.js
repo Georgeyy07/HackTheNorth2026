@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -11,7 +11,10 @@ import { COLORS } from './src/theme';
 import MotionScreen from './src/screens/MotionScreen';
 import { useTiltMonitor } from './src/motion/useTiltMonitor';
 import TiltWarningOverlay from './src/components/TiltWarningOverlay';
+import RoadAlignmentModal from './src/components/RoadAlignmentModal';
+import { useCameraStreamer } from './src/motion/useCameraStreamer';
 import { NavigationProvider, useNavigationStatus } from './src/context/NavigationContext';
+import { ImuStreamProvider } from './src/context/ImuStreamContext';
 
 const Tab = createBottomTabNavigator();
 
@@ -27,6 +30,8 @@ Notifications.setNotificationHandler({
 
 function MainApp() {
   const { isNavigating, setIsNavigating } = useNavigationStatus();
+  const [isRoadViewConfirmed, setIsRoadViewConfirmed] = useState(false);
+  const cameraRef = useRef(null);
 
   const {
     tiltAngle,
@@ -37,52 +42,93 @@ function MainApp() {
     setSimulatedAngle,
   } = useTiltMonitor({ isNavigating });
 
+  const effectiveMaxTilt = threshold || 20;
+
+  // Reset road alignment when navigation ends
+  useEffect(() => {
+    if (!isNavigating) {
+      setIsRoadViewConfirmed(false);
+    }
+  }, [isNavigating]);
+
+  // Camera streamer: streams at 15+ fps when navigating, confirmed, and tilt <= 20°
+  const cameraStreamer = useCameraStreamer({
+    cameraRef,
+    isNavigating,
+    isConfirmed: isRoadViewConfirmed,
+    tiltAngle,
+    maxTiltAngle: effectiveMaxTilt,
+    targetFps: 16,
+  });
+
   // Warning (red UI & vibration) is strictly active ONLY when isNavigating is true
   const activeWarning = Boolean(isNavigating && isWarningActive);
 
-  return (
-    <View style={{ flex: 1 }}>
-      <NavigationContainer>
-        <StatusBar style={activeWarning ? "light" : "dark"} />
-        <Tab.Navigator
-          initialRouteName="RouteFinder"
-          screenOptions={{
-            headerShown: false,
-            tabBarStyle: {
-              backgroundColor: activeWarning ? '#7f1d1d' : COLORS.parchmentSurface,
-              borderTopColor: activeWarning ? '#ef4444' : COLORS.parchmentBorderDark,
-              borderTopWidth: 1.5,
-              height: 56,
-              paddingBottom: 6,
-              paddingTop: 6,
-            },
-            tabBarLabelStyle: {
-              fontFamily: 'serif',
-              fontSize: 11,
-              fontWeight: '700',
-              letterSpacing: 0.3,
-            },
-            tabBarActiveTintColor: activeWarning ? '#fca5a5' : COLORS.forestPine,
-            tabBarInactiveTintColor: activeWarning ? '#fecaca' : COLORS.inkMuted,
-          }}
-        >
-          <Tab.Screen name="Potholes" component={PotholesScreen} options={{ title: 'Potholes' }} />
-          <Tab.Screen name="RouteFinder" component={RouteFinderScreen} options={{ title: 'Route Finder' }} />
-          <Tab.Screen name="Motion" component={MotionScreen} options={{ title: 'Motion' }} />
-        </Tab.Navigator>
-      </NavigationContainer>
+  // Both IMU and camera stream together when road view is confirmed
+  const isStreamingActive = Boolean(isNavigating && isRoadViewConfirmed);
 
-      <TiltWarningOverlay
-        tiltAngle={tiltAngle}
-        isTilted={activeWarning}
-        threshold={threshold}
-        sensorAvailable={sensorAvailable}
-        simulatedAngle={simulatedAngle}
-        onSimulateTilt={setSimulatedAngle}
-        isNavigating={isNavigating}
-        onToggleNavigating={() => setIsNavigating((prev) => !prev)}
-      />
-    </View>
+  return (
+    <ImuStreamProvider isNavigating={isStreamingActive} tiltAngle={tiltAngle} maxTiltAngle={effectiveMaxTilt}>
+      <View style={{ flex: 1 }}>
+        <NavigationContainer>
+          <StatusBar style={activeWarning ? "light" : "dark"} />
+          <Tab.Navigator
+            initialRouteName="RouteFinder"
+            screenOptions={{
+              headerShown: false,
+              tabBarStyle: {
+                backgroundColor: activeWarning ? '#7f1d1d' : COLORS.parchmentSurface,
+                borderTopColor: activeWarning ? '#ef4444' : COLORS.parchmentBorderDark,
+                borderTopWidth: 1.5,
+                height: 56,
+                paddingBottom: 6,
+                paddingTop: 6,
+              },
+              tabBarLabelStyle: {
+                fontFamily: 'serif',
+                fontSize: 11,
+                fontWeight: '700',
+                letterSpacing: 0.3,
+              },
+              tabBarActiveTintColor: activeWarning ? '#fca5a5' : COLORS.forestPine,
+              tabBarInactiveTintColor: activeWarning ? '#fecaca' : COLORS.inkMuted,
+            }}
+          >
+            <Tab.Screen name="Potholes" component={PotholesScreen} options={{ title: 'Potholes' }} />
+            <Tab.Screen name="RouteFinder" component={RouteFinderScreen} options={{ title: 'Route Finder' }} />
+            <Tab.Screen name="Motion" component={MotionScreen} options={{ title: 'Motion' }} />
+          </Tab.Navigator>
+        </NavigationContainer>
+
+        {/* Live Camera Stream with Road Alignment & Tilt Gating */}
+        <RoadAlignmentModal
+          visible={isNavigating}
+          isConfirmed={isRoadViewConfirmed}
+          tiltAngle={tiltAngle}
+          maxTiltAngle={effectiveMaxTilt}
+          cameraRef={cameraRef}
+          isStreaming={cameraStreamer.isStreaming}
+          framesSent={cameraStreamer.framesSent}
+          onConfirm={() => setIsRoadViewConfirmed(true)}
+          onRealign={() => setIsRoadViewConfirmed(false)}
+          onCancel={() => {
+            setIsNavigating(false);
+            setIsRoadViewConfirmed(false);
+          }}
+        />
+
+        <TiltWarningOverlay
+          tiltAngle={tiltAngle}
+          isTilted={activeWarning}
+          threshold={threshold}
+          sensorAvailable={sensorAvailable}
+          simulatedAngle={simulatedAngle}
+          onSimulateTilt={setSimulatedAngle}
+          isNavigating={isNavigating}
+          onToggleNavigating={() => setIsNavigating((prev) => !prev)}
+        />
+      </View>
+    </ImuStreamProvider>
   );
 }
 

@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { toWebSocketUrl } from './wsUrl.js';
 
 // The road_viewer FastAPI server (road_viewer/server.py) hosts both /api/potholes
 // and /api/route. A phone can't use relative URLs like the web viewer does, so
@@ -18,6 +19,10 @@ function resolveApiBaseUrl() {
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();
+
+export function getWebSocketUrl(path = '/ws/imu') {
+  return toWebSocketUrl(API_BASE_URL, path);
+}
 
 async function request(path, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();

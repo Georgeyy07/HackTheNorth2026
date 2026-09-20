@@ -5,6 +5,7 @@ import * as Sharing from 'expo-sharing';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { MOUNTS, mountMatrix } from '../motion/vehicle';
 import { useMotionRecorder } from '../motion/useMotionRecorder';
+import { useImuStream } from '../context/ImuStreamContext';
 import { recordingTag, saveRecordingVideo } from '../motion/files';
 
 const value = (v) => Number.isFinite(v) ? v.toFixed(3) : '—';
@@ -16,33 +17,25 @@ function Button({ children, onPress, disabled = false }) {
 
 export default function MotionScreen() {
   const recorder = useMotionRecorder();
+  const streamer = useImuStream();
   const [mount, setMount] = useState('upright');
   const [angles, setAngles] = useState(['0', '0', '0']);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
   const cameraRef = useRef(null);
   const filming = useRef(null); // { tag, pending: Promise<{uri}> } while a demo clip is recording
-  const cameraReadyRef = useRef(false); // set synchronously by onCameraReady; read via polling below
+  const cameraReady = useRef(null); // { resolve(ready) } for the pending CameraView mount
   const active = recorder.status !== 'idle';
   const sample = recorder.live?.sample;
-  // Mounted as soon as permission is granted, not gated on `active`: mounting
-  // it only when recording starts raced onCameraReady against recordAsync()
-  // and threw CameraOutputNotReadyException. Mounting early gives the native
-  // camera time to warm up before Start is ever pressed.
-  const showCamera = cameraPermission?.granted;
+  const showCamera = active && cameraPermission?.granted;
 
-  // onCameraReady can fire before the native recording pipeline (not just
-  // the preview) is actually ready to record -- a known expo-camera gap, not
-  // just an ordering bug here. Poll a ref (always current, unlike state
-  // captured in this closure) and add a short buffer after it flips.
+  // CameraView finishes native init well after it mounts; recordAsync throws
+  // until onCameraReady fires, so wait for it (bounded) instead of guessing.
   const waitForCameraReady = (timeoutMs = 4000) => new Promise((resolve) => {
-    const deadline = Date.now() + timeoutMs;
-    const check = () => {
-      if (cameraReadyRef.current) resolve(true);
-      else if (Date.now() >= deadline) resolve(false);
-      else setTimeout(check, 100);
-    };
-    check();
+    let settled = false;
+    const finish = (ready) => { if (!settled) { settled = true; resolve(ready); } };
+    cameraReady.current = { resolve: () => finish(true) };
+    setTimeout(() => finish(false), timeoutMs);
   });
 
   // Runs on every stop path (button, app-backgrounded, screen-unmounted), not
@@ -72,11 +65,6 @@ export default function MotionScreen() {
       // The demo clip is a bonus for showing the run later; never let it block
       // or fail the IMU/GPS recording that the model actually depends on.
       if (ok && readyPromise && await readyPromise && cameraRef.current) {
-        // onCameraReady flipping true still isn't a hard guarantee the
-        // recording pipeline specifically is ready (confirmed: this exact
-        // exception recurred with the plain ready-check alone) -- a short
-        // settle delay closes that gap in practice.
-        await new Promise((resolve) => setTimeout(resolve, 400));
         filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
       }
     } catch (err) { Alert.alert('Mount settings', err.message); }
@@ -124,10 +112,126 @@ export default function MotionScreen() {
         ? 'Recording to device storage · stops and saves if the app goes to the background.'
         : 'Sessions are saved locally. Export a session below to share all raw and stabilized samples.'}</Text>
 
+      <View style={styles.card}>
+        <View style={styles.streamHeader}>
+          <Text style={styles.heading}>IMU WebSocket Stream (100Hz)</Text>
+          <View style={[
+            styles.statusBadge,
+            streamer.isStreaming
+              ? styles.statusStreaming
+              : streamer.pauseReason === 'tilt_exceeded'
+              ? styles.statusAlert
+              : styles.statusIdle
+          ]}>
+            <View style={[
+              styles.statusDot,
+              streamer.isStreaming
+                ? styles.dotStreaming
+                : streamer.pauseReason === 'tilt_exceeded'
+                ? styles.dotAlert
+                : styles.dotIdle
+            ]} />
+            <Text style={[
+              styles.statusText,
+              streamer.isStreaming && styles.statusTextStreaming,
+              streamer.pauseReason === 'tilt_exceeded' && styles.statusTextAlert
+            ]}>
+              {streamer.isStreaming
+                ? 'Streaming (5x/sec)'
+                : streamer.pauseReason === 'tilt_exceeded'
+                ? 'Paused (Tilt > 20°)'
+                : streamer.isNavigating
+                ? 'Connecting…'
+                : 'Stopped (Not Navigating)'}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.description}>
+          Streams live 100Hz IMU data to backend 5 times/second (20 samples/batch). Active during navigation; stops if navigation ends or tilt exceeds 20°.
+        </Text>
+
+        <View style={styles.streamConditionsRow}>
+          <Text style={styles.conditionText}>
+            Navigation: <Text style={{ color: streamer.isNavigating ? '#34d399' : '#9ca3af', fontWeight: '700' }}>{streamer.isNavigating ? 'Active' : 'Inactive'}</Text>
+          </Text>
+          <Text style={styles.conditionText}>
+            Tilt: <Text style={{ color: streamer.tiltAngle > 20 ? '#ef4444' : '#34d399', fontWeight: '700' }}>{streamer.tiltAngle ? streamer.tiltAngle.toFixed(1) : '0.0'}°</Text> (Max: 20°)
+          </Text>
+        </View>
+
+        <View style={styles.urlRow}>
+          <Text style={styles.urlLabel}>WebSocket Endpoint:</Text>
+          <TextInput
+            accessibilityLabel="WebSocket Server URL"
+            editable={!streamer.isStreaming}
+            value={streamer.wsUrl}
+            onChangeText={streamer.setWsUrl}
+            style={styles.urlInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+
+        {streamer.error && <Text accessibilityRole="alert" style={styles.error}>{streamer.error}</Text>}
+
+        <Button
+          onPress={streamer.isStreaming
+            ? () => streamer.stop()
+            : () => streamer.start(mountMatrix(mount, ...angles.map(Number)))}
+        >
+          {streamer.isStreaming ? 'Stop WebSocket Stream' : 'Start 100Hz WebSocket Stream'}
+        </Button>
+
+        {streamer.isStreaming && (
+          <View style={styles.streamStats}>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Batches Sent</Text>
+              <Text style={styles.statNumber}>{streamer.stats.packetsSent}</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>100Hz Samples</Text>
+              <Text style={styles.statNumber}>{streamer.stats.samplesSent}</Text>
+            </View>
+          </View>
+        )}
+
+        {streamer.latestSample && (
+          <View style={styles.liveReadingsBox}>
+            <Text style={styles.subheading}>Live Streamed Values</Text>
+            <View style={styles.reading}>
+              <Text style={styles.text}>Accel (X, Y, Z)</Text>
+              <Text style={styles.subNumber}>
+                [{value(streamer.latestSample.accel_x)}, {value(streamer.latestSample.accel_y)}, {value(streamer.latestSample.accel_z)}] m/s^2
+              </Text>
+            </View>
+            <View style={styles.reading}>
+              <Text style={styles.text}>Gyro (X, Y, Z)</Text>
+              <Text style={styles.subNumber}>
+                [{value(streamer.latestSample.gyro_x)}, {value(streamer.latestSample.gyro_y)}, {value(streamer.latestSample.gyro_z)}] rad/s
+              </Text>
+            </View>
+            <View style={styles.reading}>
+              <Text style={styles.text}>Speed</Text>
+              <Text style={styles.subNumber}>
+                {value(streamer.latestSample.speed)} m/s
+              </Text>
+            </View>
+            <View style={styles.reading}>
+              <Text style={styles.text}>GPS Fix</Text>
+              <Text style={styles.subNumber}>
+                {streamer.latestSample.latitude !== null
+                  ? `${streamer.latestSample.latitude.toFixed(5)}, ${streamer.latestSample.longitude.toFixed(5)}`
+                  : 'Acquiring GPS…'}
+              </Text>
+            </View>
+          </View>
+        )}
+      </View>
       {showCamera && <View style={styles.card}>
         <Text style={styles.heading}>Demonstration video</Text>
         <CameraView ref={cameraRef} style={styles.camera} facing="back" mode="video"
-          onCameraReady={() => { cameraReadyRef.current = true; }} />
+          onCameraReady={() => cameraReady.current?.resolve()} />
         <Text style={styles.description}>Filming alongside the recording, for a visual demo of the run · saved next to this session's export.</Text>
       </View>}
       <View style={styles.card}>
@@ -183,4 +287,27 @@ const styles = StyleSheet.create({
   reading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   number: { color: '#00f2fe', fontSize: 20, fontVariant: ['tabular-nums'] },
   subNumber: { color: '#00f2fe', fontSize: 13, fontVariant: ['tabular-nums'] },
+  streamHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12 },
+  statusStreaming: { backgroundColor: '#064e3b' },
+  statusAlert: { backgroundColor: '#7f1d1d' },
+  statusIdle: { backgroundColor: '#1f2937' },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  dotStreaming: { backgroundColor: '#34d399' },
+  dotAlert: { backgroundColor: '#ef4444' },
+  dotIdle: { backgroundColor: '#6b7280' },
+  statusText: { fontSize: 11, color: '#9ca3af', fontWeight: '600' },
+  statusTextStreaming: { color: '#a7f3d0' },
+  statusTextAlert: { color: '#fca5a5' },
+  streamConditionsRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#1f2937', padding: 8, borderRadius: 8 },
+  conditionText: { color: '#d1d5db', fontSize: 12 },
+  urlRow: { gap: 6 },
+  urlLabel: { color: '#9ca3af', fontSize: 12 },
+  urlInput: { borderWidth: 1, borderColor: '#374151', padding: 8, borderRadius: 8, color: '#fff', fontSize: 12 },
+  streamStats: { flexDirection: 'row', gap: 12 },
+  statBox: { flex: 1, backgroundColor: '#1f2937', padding: 12, borderRadius: 8, alignItems: 'center', gap: 4 },
+  statLabel: { color: '#9ca3af', fontSize: 12 },
+  statNumber: { color: '#00f2fe', fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  liveReadingsBox: { gap: 6, borderTopWidth: 1, borderTopColor: '#1f2937', paddingTop: 8 },
+  subheading: { color: '#e6f4fe', fontSize: 14, fontWeight: '600' },
 });
