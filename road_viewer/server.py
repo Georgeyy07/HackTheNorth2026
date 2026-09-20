@@ -369,12 +369,18 @@ def create_app(export=None, filters=None):
                     await websocket.send_json({"status": "ready", "server": "road_viewer"})
                     continue
 
+                if isinstance(payload, dict) and (payload.get("type") == "camera_frame" or "frame_number" in payload):
+                    frame_num = payload.get("frame_number", 0)
+                    print(f"recieved camera frame {frame_num}", flush=True)
+                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    continue
+
                 if isinstance(payload, dict) and "samples" in payload:
                     samples = payload.get("samples") or []
                     batch_id = payload.get("batch_id", "")
                     gps_batch = payload.get("gps") or {}
                     if not samples:
-                        # print(f"[IMU 100Hz] Batch #{batch_id} from {client} has 0 samples", flush=True)
+                        pass
                     for s in samples:
                         total_samples += 1
                         time_val = s.get("time") or s.get("timestamp") or s.get("time_s")
@@ -437,6 +443,30 @@ def create_app(export=None, filters=None):
             logger.info(f"IMU WebSocket disconnected from {client} after {total_samples} samples")
         except Exception as exc:
             logger.warning(f"IMU WebSocket error from {client}: {exc}")
+
+    @app.websocket("/ws/camera")
+    async def websocket_camera(websocket: WebSocket):
+        await websocket.accept()
+        client = websocket.client.host if websocket.client else "unknown"
+        logger.info(f"Camera WebSocket connected from {client}")
+        frame_count = 0
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                if isinstance(payload, dict):
+                    frame_count += 1
+                    frame_num = payload.get("frame_number", frame_count)
+                    print(f"recieved camera frame {frame_num}", flush=True)
+                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+        except WebSocketDisconnect:
+            logger.info(f"Camera WebSocket disconnected from {client} after {frame_count} frames")
+        except Exception as exc:
+            logger.warning(f"Camera WebSocket error from {client}: {exc}")
 
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     app.mount("/vendor/leaflet", StaticFiles(directory=HERE / "node_modules/leaflet/dist", check_dir=False), name="leaflet")
