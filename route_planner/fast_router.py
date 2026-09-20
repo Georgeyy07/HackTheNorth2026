@@ -6,7 +6,7 @@ import urllib.request
 import json
 from typing import List, Dict, Any
 from alert_service.potholes import fetch_active_potholes, severity_label
-
+import time
 
 def _point_to_segment_dist_m(plat: float, plon: float, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     # Equirectangular projection for fast local distance
@@ -69,6 +69,8 @@ def compute_fast_osrm_routes(
     avoidance_weight: float = 3.0,
     timeout_s: float = 5.0
 ) -> Dict[str, Any]:
+    print("Computing fastest route")
+    start_t = time.perf_counter()
     url = (
         f"https://router.project-osrm.org/route/v1/driving/"
         f"{origin_lon:.5f},{origin_lat:.5f};{dest_lon:.5f},{dest_lat:.5f}"
@@ -185,6 +187,9 @@ def compute_fast_osrm_routes(
         synth = dict(final_routes[0])
         synth["label"] = "Fastest"
         final_routes.append(synth)
+
+
+    print(f"End find fastest route at {(time.perf_counter() - start_t):.6f}s")
 
     return {
         "origin": {"lat": origin_lat, "lon": origin_lon},

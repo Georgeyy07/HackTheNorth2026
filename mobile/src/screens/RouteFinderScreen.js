@@ -24,6 +24,7 @@ import {
   CompassRose,
 } from '../components/Icons';
 import { ParchmentMap, Marker, Polyline } from '../components/ParchmentMap';
+import { useNavigationStatus } from '../context/NavigationContext';
 
 function toLatLng(coords) {
   return coords.map(([lat, lon]) => ({ latitude: lat, longitude: lon }));
@@ -57,8 +58,8 @@ export default function RouteFinderScreen() {
   // Potholes in database
   const [allPotholes, setAllPotholes] = useState([]);
 
-  // Navigation mode
-  const [navigating, setNavigating] = useState(false);
+  // Navigation mode (shared with app-level tilt monitor)
+  const { isNavigating: navigating, setIsNavigating: setNavigating } = useNavigationStatus();
   const [currentInstruction, setCurrentInstruction] = useState(null);
   const [nextTurnDistance, setNextTurnDistance] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
