@@ -75,7 +75,9 @@ export default function MotionScreen() {
     try {
       if (angles.some((a) => !a.trim())) throw new Error('Enter all three correction angles.');
       const camera = await requestCameraPermission();
-      const mic = await requestMicPermission();
+      // Requested for its side effect: granting it re-renders with mute off,
+      // so the clip captures audio. The clip records either way.
+      await requestMicPermission();
       const tag = recordingTag();
       const readyPromise = camera.granted ? waitForCameraReady() : null;
       const ok = await recorder.start(mountMatrix(mount, ...angles.map(Number)), tag);
@@ -108,7 +110,7 @@ export default function MotionScreen() {
       // settle delay closes that gap in practice.
       await new Promise((resolve) => setTimeout(resolve, 400));
       setVideoNote(null);
-      filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
+      filming.current = { tag, pending: cameraRef.current.recordAsync() };
     } catch (err) { Alert.alert('Mount settings', err.message); }
   };
 
@@ -291,7 +293,13 @@ export default function MotionScreen() {
       <View style={styles.card}>
         <Text style={styles.heading}>Demonstration video</Text>
         {showCamera
+          // `mute` is a CameraView prop, not a recordAsync option. Passed as
+          // an option it was silently ignored, so the camera always tried to
+          // capture audio -- and on iOS a video recording that requests audio
+          // without microphone permission fails outright, producing no file
+          // and no error.
           ? <CameraView ref={cameraRef} style={styles.camera} facing="back" mode="video"
+              mute={!micPermission?.granted}
               onCameraReady={() => { cameraReadyRef.current = true; }} />
           : <>
               <Text style={styles.description}>
