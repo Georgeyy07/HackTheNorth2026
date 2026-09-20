@@ -8,9 +8,7 @@
 
 import { resolveFleetVideo } from './fleet-video-sync.js';
 
-const API_BASE = (window.location.origin && window.location.origin.includes('8765'))
-  ? window.location.origin
-  : 'http://localhost:8765';
+const API_BASE = window.location.port === '8888' ? 'http://localhost:8765' : window.location.origin;
 
 // 4-Car Fleet Visual Configurations
 const VEHICLE_CONFIGS = {
@@ -38,6 +36,9 @@ const state = {
   vehicleSegments: new Map(),      // carID -> [{ quality, strokeColor, weight, polyline, waypoints, startTs, endTs, isFull }]
   lastAnomalyPosPerVehicle: new Map(), // carID -> { lat, lon } (15m debouncing)
   potholes: [],
+  potholeEvents: [],
+  potholeEventIndex: 0,
+  potholeReplayTime: -Infinity,
   syncManifest: null,
   selectedScenario: 'staggered',   // 'staggered' or 'cascade'
   selectedVehicle: 'ALL',
@@ -287,18 +288,8 @@ async function loadObservationsData() {
     const rawObs = await obsRes.json();
     state.allObservations = rawObs;
 
-    // 3. Fetch active potholes from central database
-    try {
-      const potholesRes = await fetch(`${API_BASE}/api/potholes`);
-      if (potholesRes.ok) {
-        const rawPotholes = await potholesRes.json();
-        // Client-side 15m merge pass to eliminate duplicates & boost confidences
-        state.potholes = mergeDuplicatePotholes(rawPotholes, 15.0);
-      }
-    } catch (e) {
-      console.warn('Could not load potholes:', e);
-    }
-
+    // The persistent database contains discoveries from the entire drive.
+    // Replay markers are reconstructed from timestamped observations instead.
     if (el.dbStatusText) el.dbStatusText.textContent = 'TigerDB (simulated_car_observations)';
     processObservations();
     renderPotholes();
@@ -314,6 +305,11 @@ async function loadObservationsData() {
  * persistent, high-performance polyline segments (zero lag during playback).
  */
 function processObservations() {
+  state.potholes = [];
+  state.potholeEvents = [];
+  state.potholeEventIndex = 0;
+  state.potholeReplayTime = -Infinity;
+  renderPotholes();
   state.vehicleRoutes.clear();
   state.vehicleSegments.clear();
   state.lastAnomalyPosPerVehicle.clear();
@@ -347,6 +343,20 @@ function processObservations() {
     }
   });
 
+  // A chronological event stream avoids skipping detections at high playback
+  // speed or when scrubbing over a detection between animation frames.
+  const lastDetection = new Map();
+  state.potholeEvents = state.allObservations
+    .filter(wp => wp.imu_defect_detected && wp.yolo_pothole_detected)
+    .slice().sort((a, b) => a.timestamp - b.timestamp)
+    .filter(wp => {
+      const car = wp.carID || wp.car_id;
+      const last = lastDetection.get(car);
+      if (last && getDistanceMeters(wp.latitude, wp.longitude, last.latitude, last.longitude) < 15) return false;
+      lastDetection.set(car, wp);
+      return true;
+    });
+
   // Sort each car's route chronologically
   state.vehicleRoutes.forEach((route) => {
     route.sort((a, b) => a.timestamp - b.timestamp);
@@ -374,6 +384,7 @@ function processObservations() {
       if (!curSeg || curSeg.quality !== q) {
         if (curSeg && curSeg.waypoints.length > 0) {
           curSeg.waypoints.push(wp); // connect without gaps
+          curSeg.endTs = wp.timestamp;
         }
         const strokeColor = (q === 'bad') ? '#c62828' : (q === 'medium' ? '#e65100' : '#2e7d32');
         const weight = (q === 'bad') ? 7 : (q === 'medium' ? 6 : 5);
@@ -392,7 +403,7 @@ function processObservations() {
           openTelemetryInspectorForPoint(carID, wp.timestamp, wp.latitude, wp.longitude, q === 'bad', q.toUpperCase());
         });
 
-        trailLayer.addLayer(polyline);
+        // Attach only after this road is reached; future roads need no SVG elements.
 
         curSeg = {
           quality: q,
@@ -537,6 +548,7 @@ function updatePotholeMarker(p, pulse = false) {
 
   if (potholeMarkers.has(pId)) {
     const m = potholeMarkers.get(pId);
+    m.setLatLng([lat, lon]);
     m.setIcon(L.divIcon({
       className: 'custom-pothole-div-icon',
       html: potholeHtml,
@@ -605,6 +617,7 @@ function renderPotholes() {
  * Core Playback Render: updates vehicle markers & persistent trails with zero lag!
  */
 function updateMapToCurrentTime() {
+  syncReplayPotholes();
   const cars = Array.from(state.vehicleRoutes.keys()).sort();
 
   cars.forEach((carID) => {
@@ -620,10 +633,13 @@ function updateMapToCurrentTime() {
       if (marker && carLayer.hasLayer(marker)) {
         carLayer.removeLayer(marker);
       }
+      segments.renderedIndex = undefined;
       segments.forEach((seg) => {
         if (seg.isFull || seg.polyline.getLatLngs().length > 0) {
           seg.polyline.setLatLngs([]);
+          trailLayer.removeLayer(seg.polyline);
           seg.isFull = false;
+          seg.lastWpIdx = -1;
         }
       });
       return;
@@ -662,15 +678,6 @@ function updateMapToCurrentTime() {
         currentPos = [currWp.latitude, currWp.longitude];
       }
 
-      // Check anomaly detection with 15m spatial debouncing
-      if (currWp.imu_defect_detected && currWp.yolo_pothole_detected) {
-        const lastPos = state.lastAnomalyPosPerVehicle.get(carID);
-        const distFromLast = lastPos ? getDistanceMeters(currWp.latitude, currWp.longitude, lastPos.lat, lastPos.lon) : Infinity;
-        if (distFromLast >= 15.0) {
-          state.lastAnomalyPosPerVehicle.set(carID, { lat: currWp.latitude, lon: currWp.longitude });
-          handleAnomalyEncountered(currWp, carID);
-        }
-      }
     } else {
       currentPos = [waypoints[0].latitude, waypoints[0].longitude];
     }
@@ -680,13 +687,19 @@ function updateMapToCurrentTime() {
       marker.setLatLng(currentPos);
     }
 
-    // Update persistent polyline segments (0 recreation, 0 DOM thrashing)
+    // GPS waypoints change much less often than animation frames. Keep marker
+    // interpolation smooth, but only revisit road geometry after a new waypoint.
+    if (segments.renderedIndex === passedIndex && segments.renderedVisible === isVisible) return;
+    segments.renderedIndex = passedIndex;
+    segments.renderedVisible = isVisible;
     segments.forEach((seg) => {
       if (seg.startTs > state.currentTimeMs) {
         // Future segment
         if (seg.isFull || seg.polyline.getLatLngs().length > 0) {
           seg.polyline.setLatLngs([]);
+          trailLayer.removeLayer(seg.polyline);
           seg.isFull = false;
+          seg.lastWpIdx = -1;
         }
       } else if (seg.endTs <= state.currentTimeMs) {
         // Fully traversed segment: set once and keep
@@ -699,6 +712,7 @@ function updateMapToCurrentTime() {
           const lastWp = seg.waypoints[seg.waypoints.length - 1];
           pts.push([lastWp.latitude, lastWp.longitude]);
           seg.polyline.setLatLngs(pts);
+          if (!trailLayer.hasLayer(seg.polyline)) trailLayer.addLayer(seg.polyline);
           seg.isFull = true;
         }
       } else {
@@ -718,6 +732,7 @@ function updateMapToCurrentTime() {
           }
           if (currentPos) pts.push(currentPos);
           seg.polyline.setLatLngs(pts);
+          if (!trailLayer.hasLayer(seg.polyline)) trailLayer.addLayer(seg.polyline);
         }
       }
     });
@@ -726,12 +741,9 @@ function updateMapToCurrentTime() {
   // Update Scrubber UI
   const elapsedMs = state.currentTimeMs - state.startTimeMs;
   if (el.timelineSlider) el.timelineSlider.value = Math.max(0, elapsedMs);
-  if (el.currentTimeLabel) el.currentTimeLabel.textContent = formatDuration(elapsedMs);
+  const timeLabel = formatDuration(elapsedMs);
+  if (el.currentTimeLabel && el.currentTimeLabel.textContent !== timeLabel) el.currentTimeLabel.textContent = timeLabel;
 
-  // If inspector is open and tracking live car, sync it
-  if (state.inspector.isOpen && !state.inspector.isIncident) {
-    syncLiveInspectorVideo(false);
-  }
 }
 
 /**
@@ -739,6 +751,7 @@ function updateMapToCurrentTime() {
  */
 function invalidateSegmentCaches() {
   state.vehicleSegments.forEach((segments) => {
+    segments.renderedIndex = undefined;
     segments.forEach((seg) => {
       seg.isFull = false;
       seg.lastWpIdx = -1;
@@ -747,133 +760,41 @@ function invalidateSegmentCaches() {
 }
 
 /**
- * Handle vehicle encountering an anomaly point during replay:
- * 15m SPATIAL MERGING: If a pothole exists within 15m, merge and boost confidence!
+ * Replay discoveries using observation time, never the database's final state.
+ * Rewind rebuilds only past evidence; forward playback consumes each event once.
+ * Viewing a recording must not add duplicate detections to the live database.
  */
-async function handleAnomalyEncountered(wp, carID) {
-  const imu = Boolean(wp.imu_defect_detected || wp.imu);
-  const yolo = Boolean(wp.yolo_pothole_detected || wp.yolo);
-  const sevLabel = (imu && yolo) ? 'CRITICAL' : 'HIGH';
-
-  // Check if an existing pothole is within 15 meters
-  const nearby = findNearbyPothole(wp.latitude, wp.longitude, 15.0);
-
-  if (nearby) {
-    // 15m SPATIAL MERGE!
-    const oldConf = Number(nearby.confidence) || 0.85;
-    const boostedConf = Math.min(0.99, Math.round((oldConf + 0.05) * 100) / 100);
-    nearby.confidence = boostedConf;
-    nearby.hit_count = (nearby.hit_count || 1) + 1;
-    if (sevLabel === 'CRITICAL') nearby.severity = 'CRITICAL';
-
-    // Visual pulse & update on map marker
-    updatePotholeMarker(nearby, true);
-    populateDrawerTables();
-
-    // Show Toast
-    if (el.toastCarId) el.toastCarId.textContent = carID;
-    if (el.toastDesc) el.toastDesc.textContent = `Pothole Re-confirmed! Merged with existing defect within 15m. Confidence boosted to ${Math.round(boostedConf * 100)}%.`;
-    if (el.toastImuPill) {
-      el.toastImuPill.textContent = 'IMU Shock: DETECTED';
-      el.toastImuPill.style.background = '#fde8e4';
-      el.toastImuPill.style.color = '#b83824';
-    }
-    if (el.toastYoloPill) {
-      el.toastYoloPill.textContent = 'YOLO Vision: CONFIRMED';
-      el.toastYoloPill.style.background = '#fdf3e4';
-      el.toastYoloPill.style.color = '#d4652c';
-    }
-    if (el.toastIngestStatus) {
-      el.toastIngestStatus.innerHTML = `<span>🔄 Merged into Pothole #${nearby.id || 'canonical'} (Confidence: ${Math.round(boostedConf * 100)}%)</span>`;
-    }
-    if (el.anomalyToast) el.anomalyToast.style.display = 'block';
-
-    // Sync merge to PostgreSQL TigerDB
-    try {
-      await fetch(`${API_BASE}/api/potholes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          latitude: wp.latitude,
-          longitude: wp.longitude,
-          severity: nearby.severity,
-          confidence: boostedConf,
-          detected_by_vision: yolo,
-          detected_by_imu: imu,
-        }),
-      });
-    } catch (e) {
-      console.warn('Sync merge error:', e);
-    }
-  } else {
-    // Brand new pothole (> 15m from any existing)
-    const newPothole = {
-      id: `pothole-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      latitude: wp.latitude,
-      longitude: wp.longitude,
-      severity: sevLabel,
-      confidence: 0.85,
-      hit_count: 1,
-      timestamp: new Date().toISOString(),
-      detected_by_vision: yolo,
-      detected_by_imu: imu,
-    };
-    state.potholes.push(newPothole);
-    updatePotholeMarker(newPothole, true);
-    if (el.statPotholes) el.statPotholes.textContent = state.potholes.length;
-    populateDrawerTables();
-
-    // Show Toast
-    if (el.toastCarId) el.toastCarId.textContent = carID;
-    if (el.toastDesc) el.toastDesc.textContent = `New road anomaly cataloged at (${wp.latitude.toFixed(4)}, ${wp.longitude.toFixed(4)})`;
-    if (el.toastImuPill) {
-      el.toastImuPill.textContent = `IMU Shock: ${imu ? 'DETECTED' : 'Normal'}`;
-      el.toastImuPill.style.background = imu ? '#fde8e4' : '#e1ecd9';
-      el.toastImuPill.style.color = imu ? '#b83824' : '#3b6138';
-    }
-    if (el.toastYoloPill) {
-      el.toastYoloPill.textContent = `YOLO Vision: ${yolo ? 'CONFIRMED' : 'Normal'}`;
-      el.toastYoloPill.style.background = yolo ? '#fdf3e4' : '#e1ecd9';
-      el.toastYoloPill.style.color = yolo ? '#d4652c' : '#3b6138';
-    }
-    if (el.toastIngestStatus) {
-      el.toastIngestStatus.innerHTML = `<span>✍️ Cataloging into central database...</span>`;
-    }
-    if (el.anomalyToast) el.anomalyToast.style.display = 'block';
-
-    // Sync to PostgreSQL TigerDB
-    try {
-      const resp = await fetch(`${API_BASE}/api/potholes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          latitude: wp.latitude,
-          longitude: wp.longitude,
-          severity: sevLabel,
-          confidence: 0.85,
-          detected_by_vision: yolo,
-          detected_by_imu: imu,
-        }),
-      });
-      if (resp.ok) {
-        const saved = await resp.json();
-        if (saved.id) newPothole.id = saved.id;
-        if (saved.confidence) newPothole.confidence = saved.confidence;
-        updatePotholeMarker(newPothole, false);
-        if (el.toastIngestStatus) {
-          el.toastIngestStatus.innerHTML = `<span>✅ Live Seeded into Database! (ID: ${newPothole.id})</span>`;
-        }
-      }
-    } catch (e) {
-      console.warn('Sync create error:', e);
-    }
+function syncReplayPotholes() {
+  const now = state.currentTimeMs;
+  let changed = false;
+  if (now < state.potholeReplayTime) {
+    state.potholes = [];
+    state.potholeEventIndex = 0;
+    changed = true;
   }
-
-  setTimeout(() => {
-    if (el.anomalyToast && el.anomalyToast.style.display === 'block') {
-      el.anomalyToast.style.display = 'none';
+  while (state.potholeEventIndex < state.potholeEvents.length &&
+         state.potholeEvents[state.potholeEventIndex].timestamp <= now) {
+    const wp = state.potholeEvents[state.potholeEventIndex++];
+    const nearby = findNearbyPothole(wp.latitude, wp.longitude, 15);
+    if (nearby) {
+      nearby.hit_count++;
+      nearby.confidence = Math.min(0.99, Math.round((nearby.confidence + 0.05) * 100) / 100);
+    } else {
+      state.potholes.push({
+        id: `replay-${state.potholeEventIndex}`,
+        latitude: wp.latitude, longitude: wp.longitude,
+        severity: 'CRITICAL', confidence: 0.85, hit_count: 1,
+        timestamp: new Date(wp.timestamp).toISOString(),
+        detected_by_vision: true, detected_by_imu: true,
+      });
     }
-  }, 3500);
+    changed = true;
+  }
+  state.potholeReplayTime = now;
+  if (changed) {
+    renderPotholes();
+    populateDrawerTables();
+  }
 }
 
 /* ==========================================================================
@@ -1015,10 +936,11 @@ function prepareAndPlayIncidentClip() {
     }
   };
 
-  const expectedFileName = expectedUrl.split('/').pop();
-  const currentFileName = vid.currentSrc ? vid.currentSrc.split('/').pop() : '';
+  // currentSrc may be empty until resource selection finishes. Compare the
+  // assigned URL so a slow load is not restarted on every animation frame.
+  const sourceChanged = vid.src !== new URL(expectedUrl, document.baseURI).href;
 
-  if (currentFileName !== expectedFileName) {
+  if (sourceChanged) {
     // Switch video file source
     vid.pause();
     vid.addEventListener('loadedmetadata', () => {
@@ -1188,15 +1110,23 @@ function startLiveDrivingInspector() {
 
   syncLiveInspectorVideo(true);
 
-  function liveTick() {
+  let lastTick = -Infinity;
+  let lastSamples;
+  function liveTick(timestamp) {
     if (token !== state.inspector.loadToken || !state.inspector.isOpen || state.inspector.isIncident) {
       return;
     }
 
-    syncLiveInspectorVideo(false);
-
-    // Live accelerometer based on current waypoint quality
-    renderMockAccelerometer(0.0, state.inspector.severity);
+    // Native video playback supplies the frames. Alignment only needs 10 Hz,
+    // including while paused so scrubs and pause changes are reflected promptly.
+    if (timestamp - lastTick >= 100) {
+      lastTick = timestamp;
+      syncLiveInspectorVideo(false);
+      if (lastSamples !== state.inspector.imuSamples) {
+        lastSamples = state.inspector.imuSamples;
+        renderRealAccelerometer(0.0, state.inspector.severity);
+      }
+    }
 
     state.inspector.animId = requestAnimationFrame(liveTick);
   }
@@ -1223,10 +1153,11 @@ function syncLiveInspectorVideo(forceSeek = false) {
   if (!vid) return;
 
   const expectedUrl = target.url || `/demo_view/videos/session2.mp4`;
-  const expectedFileName = expectedUrl.split('/').pop();
-  const currentFileName = vid.currentSrc ? vid.currentSrc.split('/').pop() : '';
+  // currentSrc may be empty until resource selection finishes. Compare the
+  // assigned URL so a slow load is not restarted on every animation frame.
+  const sourceChanged = vid.src !== new URL(expectedUrl, document.baseURI).href;
 
-  if (currentFileName !== expectedFileName) {
+  if (sourceChanged) {
     vid.src = expectedUrl;
     vid.load();
     vid.playbackRate = state.playbackSpeed;
@@ -1243,11 +1174,11 @@ function syncLiveInspectorVideo(forceSeek = false) {
   if (vid.readyState >= 1) {
     const drift = Math.abs(vid.currentTime - target.currentTime);
     // Only seek if forced (scrub) or if drift is major (> 2.5s) to avoid decoder thrashing
-    if (forceSeek || drift > 2.5) {
+    if (forceSeek || (!vid.seeking && drift > 2.5)) {
       vid.currentTime = target.currentTime;
     }
 
-    if (state.isPlaying) {
+    if (state.isPlaying && target.state === 'playing') {
       if (vid.paused) vid.play().catch(() => { });
     } else {
       if (!vid.paused) vid.pause();
