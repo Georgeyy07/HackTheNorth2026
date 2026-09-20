@@ -7,12 +7,12 @@ import { MOUNTS, mountMatrix } from '../motion/vehicle';
 import { useMotionRecorder } from '../motion/useMotionRecorder';
 import { useImuStream } from '../context/ImuStreamContext';
 import { recordingTag, saveRecordingVideo } from '../motion/files';
+import { COLORS, WoodButton } from '../theme';
 
 const value = (v) => Number.isFinite(v) ? v.toFixed(3) : '—';
 
-function Button({ children, onPress, disabled = false }) {
-  return <TouchableOpacity accessibilityRole="button" disabled={disabled} onPress={onPress}
-    style={[styles.button, disabled && styles.disabled]}><Text style={styles.buttonText}>{children}</Text></TouchableOpacity>;
+function Button({ children, onPress, disabled = false, variant = 'default' }) {
+  return <WoodButton onPress={onPress} disabled={disabled} variant={variant}>{children}</WoodButton>;
 }
 
 export default function MotionScreen() {
@@ -99,29 +99,42 @@ export default function MotionScreen() {
   };
 
   return <SafeAreaView style={styles.container} edges={['top']}>
+    <View style={styles.header}>
+      <View>
+        <Text style={styles.headerTitle}>Motion Recorder</Text>
+        <Text style={styles.headerSub}>Raw IMU & GPS · VQF stabilized</Text>
+      </View>
+      <View style={[styles.recordBadge, active && styles.recordBadgeActive]}>
+        <View style={[styles.recordDot, active && styles.recordDotActive]} />
+        <Text style={[styles.recordBadgeText, active && styles.recordBadgeTextActive]}>
+          {recorder.status === 'starting' ? 'Starting' : active ? 'Recording' : 'Idle'}
+        </Text>
+      </View>
+    </View>
+
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Motion recorder</Text>
       <Text style={styles.description}>Record original IMU and GPS events alongside VQF-stabilized motion. Keep the phone rigidly mounted and the app in the foreground.</Text>
       <View style={styles.card}>
         <Text style={styles.heading}>Phone mount</Text>
         <Text style={styles.description}>Screen faces the occupants, toward the rear of the car.</Text>
         <View style={styles.row}>{Object.entries(MOUNTS).map(([key, entry]) =>
           <TouchableOpacity key={key} accessibilityRole="button" accessibilityState={{ selected: mount === key }} disabled={active}
-            onPress={() => setMount(key)} style={[styles.chip, mount === key && styles.selected]}>
-            <Text style={styles.text}>{entry.label}</Text>
+            onPress={() => setMount(key)} style={[styles.chip, mount === key && styles.selected, active && styles.chipDisabled]}>
+            <Text style={[styles.text, mount === key && styles.selectedText]}>{entry.label}</Text>
           </TouchableOpacity>)}</View>
         <Text style={styles.description}>Optional mount corrections in degrees: rotate around vehicle X (roll), then Y (pitch), then Z (yaw), using the right-hand rule.</Text>
         <View style={styles.row}>{['Roll', 'Pitch', 'Yaw'].map((label, i) =>
-          <View key={label} style={styles.angle}><Text style={styles.text}>{label}</Text>
+          <View key={label} style={styles.angle}><Text style={styles.label}>{label}</Text>
             <TextInput accessibilityLabel={`${label} correction in degrees`} editable={!active} value={angles[i]}
               onChangeText={(text) => setAngles((old) => old.map((v, j) => i === j ? text : v))}
-              style={styles.input} keyboardType="numbers-and-punctuation" autoCorrect={false} />
+              style={[styles.input, active && styles.inputDisabled]} keyboardType="numbers-and-punctuation" autoCorrect={false}
+              placeholderTextColor={COLORS.inkMuted} />
           </View>)}</View>
         <Text style={styles.description}>For tilt calibration, park on level ground with a fresh GPS fix and keep the mount still. Calibration cannot determine yaw; align the screen toward the rear or set yaw manually.</Text>
-        <Button disabled={!sample?.canCalibrate || recorder.status !== 'recording'} onPress={recorder.calibrate}>Calibrate parked tilt</Button>
+        <Button variant="forest" disabled={!sample?.canCalibrate || recorder.status !== 'recording'} onPress={recorder.calibrate}>Calibrate parked tilt</Button>
       </View>
-      {recorder.error && <Text accessibilityRole="alert" style={styles.error}>{recorder.error}</Text>}
-      <Button onPress={active ? () => recorder.stop() : start}>{active ? 'Stop and save recording' : 'Start recording'}</Button>
+      {recorder.error && <View style={styles.errorBanner}><Text accessibilityRole="alert" style={styles.errorText}>{recorder.error}</Text></View>}
+      <Button variant={active ? 'danger' : 'default'} onPress={active ? () => recorder.stop() : start}>{active ? 'Stop and save recording' : 'Start recording'}</Button>
       <Text style={styles.description}>{recorder.status === 'starting' ? 'Starting sensors and GPS…' : active
         ? 'Recording to device storage · stops and saves if the app goes to the background.'
         : 'Sessions are saved locally. Export a session below to share all raw and stabilized samples.'}</Text>
@@ -167,7 +180,7 @@ export default function MotionScreen() {
 
         <View style={styles.streamConditionsRow}>
           <Text style={styles.conditionText}>
-            Navigation: <Text style={{ color: streamer.isNavigating ? '#34d399' : '#9ca3af', fontWeight: '700' }}>{streamer.isNavigating ? 'Active' : 'Inactive'}</Text>
+            Navigation: <Text style={streamer.isNavigating ? styles.conditionOn : styles.conditionOff}>{streamer.isNavigating ? 'Active' : 'Inactive'}</Text>
           </Text>
           <Text style={styles.conditionText}>
             {/* Tilt: <Text style={{ color: streamer.tiltAngle > 20 ? '#ef4444' : '#34d399', fontWeight: '700' }}>{streamer.tiltAngle ? streamer.tiltAngle.toFixed(1) : '0.0'}°</Text> (Max: 20°) */}
@@ -175,21 +188,23 @@ export default function MotionScreen() {
         </View>
 
         <View style={styles.urlRow}>
-          <Text style={styles.urlLabel}>WebSocket Endpoint:</Text>
+          <Text style={styles.label}>WebSocket Endpoint:</Text>
           <TextInput
             accessibilityLabel="WebSocket Server URL"
             editable={!streamer.isStreaming}
             value={streamer.wsUrl}
             onChangeText={streamer.setWsUrl}
-            style={styles.urlInput}
+            style={[styles.input, styles.urlInput, streamer.isStreaming && styles.inputDisabled]}
             autoCapitalize="none"
             autoCorrect={false}
+            placeholderTextColor={COLORS.inkMuted}
           />
         </View>
 
-        {streamer.error && <Text accessibilityRole="alert" style={styles.error}>{streamer.error}</Text>}
+        {streamer.error && <View style={styles.errorBanner}><Text accessibilityRole="alert" style={styles.errorText}>{streamer.error}</Text></View>}
 
         <Button
+          variant={streamer.isStreaming ? 'danger' : 'default'}
           onPress={streamer.isStreaming
             ? () => streamer.stop()
             : () => streamer.start(mountMatrix(mount, ...angles.map(Number)))}
@@ -258,7 +273,7 @@ export default function MotionScreen() {
       <View style={styles.card}>
         <Text style={styles.heading}>VQF-stabilized motion</Text>
         <Text style={styles.description}>Earth frame · Z up, arbitrary horizontal heading. Full acceleration and gyro XYZ are saved; this vertical preview subtracts gravity.</Text>
-        <Text style={styles.number}>{value(sample?.verticalLinear)} m/s² vertical</Text>
+        <Text style={styles.bigNumber}>{value(sample?.verticalLinear)} m/s² vertical</Text>
         <Text style={styles.description}>{!sample ? 'Waiting for fresh accelerometer + gyro samples.'
           : sample.settling ? 'Filter settling · first 10 seconds of this segment.' : 'Filter running.'}</Text>
         <Text style={styles.description}>BasicVQF 6D · no magnetometer or gyro-bias estimator.</Text>
@@ -266,14 +281,14 @@ export default function MotionScreen() {
       {recorder.live && <Text style={styles.description}>
         Saved events: {recorder.live.counts.accelerometer} accel · {recorder.live.counts.gyroscope} gyro · {recorder.live.counts.location} GPS · {recorder.live.counts.stabilized} fused
       </Text>}
-      <Text style={styles.heading}>Saved recordings</Text>
+      <Text style={styles.sectionTitle}>Saved recordings</Text>
       {!recorder.recordings.length && <Text style={styles.description}>No recordings yet.</Text>}
       {recorder.recordings.map((file) => <View style={styles.card} key={file.uri}>
-        <Text style={styles.text}>{file.name}</Text>
+        <Text style={styles.fileName}>{file.name}</Text>
         <Text style={styles.description}>{(file.size / 1024 / 1024).toFixed(2)} MB · JSONL · raw + stabilized</Text>
         <Button disabled={active} onPress={() => share(file)}>Export session</Button>
         {file.video
-          ? <Button disabled={active} onPress={() => shareVideo(file.video)}>Export demo video ({(file.video.size / 1024 / 1024).toFixed(1)} MB)</Button>
+          ? <Button variant="forest" disabled={active} onPress={() => shareVideo(file.video)}>{`Export demo video (${(file.video.size / 1024 / 1024).toFixed(1)} MB)`}</Button>
           : <Text style={styles.description}>No demo video for this session.</Text>}
       </View>)}
     </ScrollView>
@@ -281,47 +296,146 @@ export default function MotionScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b0f19' },
+  container: { flex: 1, backgroundColor: COLORS.parchmentBg },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: COLORS.parchmentSurface,
+    borderBottomWidth: 1.5,
+    borderBottomColor: COLORS.parchmentBorder,
+  },
+  headerTitle: { fontSize: 17, fontWeight: '800', color: COLORS.inkPrimary, fontFamily: 'serif' },
+  headerSub: { fontSize: 11, color: COLORS.inkSecondary, fontFamily: 'serif', marginTop: 1 },
+  recordBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.parchmentBorderDark,
+    backgroundColor: COLORS.parchmentCard,
+  },
+  recordBadgeActive: { borderColor: COLORS.terracotta, backgroundColor: '#fbe4d6' },
+  recordDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.inkMuted },
+  recordDotActive: { backgroundColor: COLORS.terracotta },
+  recordBadgeText: { fontSize: 11, fontWeight: '700', color: COLORS.inkSecondary, fontFamily: 'serif' },
+  recordBadgeTextActive: { color: COLORS.terracottaDark },
+
   content: { padding: 16, gap: 12, paddingBottom: 40 },
-  title: { color: '#00f2fe', fontWeight: '700', fontSize: 24 },
-  heading: { color: '#e6f4fe', fontWeight: '700', fontSize: 17 },
-  description: { color: '#9ca3af', fontSize: 13, lineHeight: 19 },
-  card: { backgroundColor: '#111827', borderRadius: 12, padding: 16, gap: 12 },
-  camera: { width: '100%', aspectRatio: 16 / 9, borderRadius: 8, overflow: 'hidden', backgroundColor: '#000' },
-  text: { color: '#e6f4fe', fontSize: 13 },
+  sectionTitle: { color: COLORS.inkPrimary, fontWeight: '800', fontSize: 17, fontFamily: 'serif', marginTop: 4 },
+  heading: { color: COLORS.inkPrimary, fontWeight: '700', fontSize: 16, fontFamily: 'serif' },
+  subheading: { color: COLORS.inkPrimary, fontSize: 14, fontWeight: '700', fontFamily: 'serif' },
+  description: { color: COLORS.inkSecondary, fontSize: 12, lineHeight: 18, fontFamily: 'serif' },
+  label: { color: COLORS.inkMuted, fontSize: 11, fontFamily: 'serif', fontWeight: '700' },
+  card: {
+    backgroundColor: COLORS.parchmentCard,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: COLORS.parchmentBorderDark,
+    padding: 14,
+    gap: 10,
+  },
+  camera: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: COLORS.parchmentBorderDark,
+    overflow: 'hidden',
+    backgroundColor: '#2a1408',
+  },
+  text: { color: COLORS.inkPrimary, fontSize: 12, fontFamily: 'serif' },
+  fileName: { color: COLORS.inkPrimary, fontSize: 13, fontWeight: '700', fontFamily: 'serif' },
   row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  chip: { borderColor: '#374151', borderWidth: 1, borderRadius: 8, padding: 10 },
-  selected: { borderColor: '#00f2fe', backgroundColor: '#153846' },
-  angle: { flex: 1, gap: 6 },
-  input: { borderWidth: 1, borderColor: '#374151', padding: 10, borderRadius: 8, color: '#fff' },
-  button: { backgroundColor: '#00f2fe', padding: 14, borderRadius: 8, alignItems: 'center' },
-  buttonText: { color: '#0b0f19', fontWeight: '700', fontSize: 14 },
-  disabled: { opacity: 0.4 },
-  error: { color: '#fecaca', backgroundColor: '#7f1d1d', padding: 12, borderRadius: 8 },
+  chip: {
+    borderColor: COLORS.parchmentBorderDark,
+    backgroundColor: COLORS.parchmentInput,
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  selected: { borderColor: COLORS.terracotta, backgroundColor: '#fbe4d6' },
+  selectedText: { color: COLORS.terracottaDark, fontWeight: '700' },
+  chipDisabled: { opacity: 0.55 },
+  angle: { flex: 1, gap: 5 },
+  input: {
+    borderWidth: 1.5,
+    borderColor: COLORS.parchmentBorder,
+    backgroundColor: COLORS.parchmentInput,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    color: COLORS.inkPrimary,
+    fontFamily: 'serif',
+    fontSize: 13,
+  },
+  inputDisabled: { opacity: 0.7, backgroundColor: COLORS.parchmentSurface },
+  errorBanner: {
+    backgroundColor: '#f5dedb',
+    borderColor: COLORS.hazardCritical,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  errorText: { fontSize: 11, color: COLORS.hazardCritical, fontFamily: 'serif' },
   reading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  number: { color: '#00f2fe', fontSize: 20, fontVariant: ['tabular-nums'] },
-  subNumber: { color: '#00f2fe', fontSize: 13, fontVariant: ['tabular-nums'] },
-  streamHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12 },
-  statusStreaming: { backgroundColor: '#064e3b' },
-  statusAlert: { backgroundColor: '#7f1d1d' },
-  statusIdle: { backgroundColor: '#1f2937' },
+  number: { color: COLORS.terracottaDark, fontSize: 17, fontFamily: 'serif', fontWeight: '700', fontVariant: ['tabular-nums'] },
+  bigNumber: { color: COLORS.terracottaDark, fontSize: 20, fontFamily: 'serif', fontWeight: '800', fontVariant: ['tabular-nums'] },
+  subNumber: { color: COLORS.terracottaDark, fontSize: 12, fontFamily: 'serif', fontVariant: ['tabular-nums'] },
+
+  streamHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  statusStreaming: { backgroundColor: COLORS.forestTint, borderColor: COLORS.forestMoss },
+  statusAlert: { backgroundColor: '#f5dedb', borderColor: COLORS.hazardCritical },
+  statusIdle: { backgroundColor: COLORS.parchmentInput, borderColor: COLORS.parchmentBorderDark },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
-  dotStreaming: { backgroundColor: '#34d399' },
-  dotAlert: { backgroundColor: '#ef4444' },
-  dotIdle: { backgroundColor: '#6b7280' },
-  statusText: { fontSize: 11, color: '#9ca3af', fontWeight: '600' },
-  statusTextStreaming: { color: '#a7f3d0' },
-  statusTextAlert: { color: '#fca5a5' },
-  streamConditionsRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#1f2937', padding: 8, borderRadius: 8 },
-  conditionText: { color: '#d1d5db', fontSize: 12 },
-  urlRow: { gap: 6 },
-  urlLabel: { color: '#9ca3af', fontSize: 12 },
-  urlInput: { borderWidth: 1, borderColor: '#374151', padding: 8, borderRadius: 8, color: '#fff', fontSize: 12 },
-  streamStats: { flexDirection: 'row', gap: 12 },
-  statBox: { flex: 1, backgroundColor: '#1f2937', padding: 12, borderRadius: 8, alignItems: 'center', gap: 4 },
-  statLabel: { color: '#9ca3af', fontSize: 12 },
-  statNumber: { color: '#00f2fe', fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  liveReadingsBox: { gap: 6, borderTopWidth: 1, borderTopColor: '#1f2937', paddingTop: 8 },
-  subheading: { color: '#e6f4fe', fontSize: 14, fontWeight: '600' },
+  dotStreaming: { backgroundColor: COLORS.forestPine },
+  dotAlert: { backgroundColor: COLORS.hazardCritical },
+  dotIdle: { backgroundColor: COLORS.inkMuted },
+  statusText: { fontSize: 10, color: COLORS.inkSecondary, fontWeight: '700', fontFamily: 'serif' },
+  statusTextStreaming: { color: COLORS.forestDark },
+  statusTextAlert: { color: COLORS.hazardCritical },
+  streamConditionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.parchmentInput,
+    borderWidth: 1,
+    borderColor: COLORS.parchmentBorder,
+    padding: 8,
+    borderRadius: 8,
+  },
+  conditionText: { color: COLORS.inkSecondary, fontSize: 11, fontFamily: 'serif' },
+  conditionOn: { color: COLORS.forestPine, fontWeight: '700' },
+  conditionOff: { color: COLORS.inkMuted, fontWeight: '700' },
+  urlRow: { gap: 5 },
+  urlInput: { fontSize: 11 },
+  streamStats: { flexDirection: 'row', gap: 10 },
+  statBox: {
+    flex: 1,
+    backgroundColor: COLORS.parchmentInput,
+    borderWidth: 1,
+    borderColor: COLORS.parchmentBorder,
+    padding: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    gap: 3,
+  },
+  statLabel: { color: COLORS.inkMuted, fontSize: 11, fontFamily: 'serif' },
+  statNumber: { color: COLORS.terracottaDark, fontSize: 18, fontWeight: '800', fontFamily: 'serif', fontVariant: ['tabular-nums'] },
+  liveReadingsBox: { gap: 6, borderTopWidth: 1, borderTopColor: COLORS.parchmentBorder, paddingTop: 8 },
 });
