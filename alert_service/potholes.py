@@ -99,7 +99,7 @@ def fetch_active_potholes(force_refresh: bool = False) -> List[PotholeReport]:
             rows = cursor.fetchall()
             # Assumes a 0-10 scale (true for every name this column has had so far).
             result = [
-                PotholeReport(id=str(pid), lat=lat, lon=lon, severity=min(1.0, max(0.0, score / 10.0)))
+                PotholeReport(id=str(pid), lat=lat, lon=lon, severity=0.5 if score is None else min(1.0, max(0.0, score / 10.0)))
                 for pid, lat, lon, score in rows
             ]
         else:

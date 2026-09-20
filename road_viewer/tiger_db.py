@@ -22,7 +22,7 @@ def load_env():
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 key, val = line.split('=', 1)
-                os.environ[key.strip()] = val.strip()
+                os.environ.setdefault(key.strip(), val.strip())
 
 load_env()
 
@@ -73,16 +73,6 @@ def init_db():
             logger.info(f"TimescaleDB extension notice: {e}")
             conn.rollback()
 
-        # Drop old table if columns mismatch (e.g. depth_cm exists from previous schema)
-        try:
-            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='potholes';")
-            existing_cols = [r[0] for r in cursor.fetchall()]
-            if 'depth_cm' in existing_cols or 'description' in existing_cols or 'session_id' in existing_cols:
-                cursor.execute("DROP TABLE IF EXISTS potholes CASCADE;")
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-
         create_sql = """
         CREATE TABLE IF NOT EXISTS potholes (
             id SERIAL PRIMARY KEY,
@@ -122,16 +112,7 @@ def init_db():
         conn.commit()
 
     else:
-        # SQLite fallback schema
-        try:
-            cursor.execute("PRAGMA table_info(potholes);")
-            cols = [r[1] for r in cursor.fetchall()]
-            if 'depth_cm' in cols or 'description' in cols or 'session_id' in cols:
-                cursor.execute("DROP TABLE IF EXISTS potholes;")
-                conn.commit()
-        except Exception:
-            pass
-
+        # Preserve existing data; schema changes require an explicit migration.
         create_sql = """
         CREATE TABLE IF NOT EXISTS potholes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

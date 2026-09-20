@@ -131,3 +131,38 @@ def test_potholes_api_crud_operations(replay):
     # DELETE pothole
     del_res = client.delete(f'/api/potholes/{p_id}')
     assert del_res.status_code == 200
+
+
+def test_ordinal_probabilities_and_camera_frames_survive_export(replay):
+    _, export, _ = replay
+    folder = export / 'kaggle_fixture'
+    with gzip.open(folder / 'updates.jsonl.gz', 'wt') as f:
+        f.write(json.dumps(dict(target_patch=0, available_s=.49, is_final=True, valid=True,
+                                quality_probability=[.7,.2,.1], quality_grade=0,
+                                quality_name='good', provider='baseten'))+'\n')
+    vision = dict(fps=1, duration_s=2, video_offset_s=.4,
+                  frames=[dict(video_time_s=0,frame_index=0,detections=[])])
+    (folder/'vision.json').write_text(json.dumps(vision))
+    (folder/'frames').mkdir()
+    (folder/'frames/000000.jpg').write_bytes(b'jpeg-fixture')
+    client = TestClient(create_app(export, export/'no_profiles'))
+    data = client.get('/api/session/kaggle_fixture').json()
+    assert data['updates'][0]['quality_probability'] == [.7,.2,.1]
+    assert data['updates'][0]['iri_m_per_km'] is None
+    assert data['vision'] == vision
+    assert client.get('/api/session/kaggle_fixture/frames/0').content == b'jpeg-fixture'
+    assert client.get('/api/session/kaggle_fixture/annotated.mp4').status_code == 404
+    (folder/'annotated.mp4').write_bytes(b'video-fixture')
+    video = client.get('/api/session/kaggle_fixture/annotated.mp4')
+    assert video.content == b'video-fixture' and video.headers['content-type'] == 'video/mp4'
+    assert video.headers['content-disposition'].startswith('inline')
+    partial = client.get('/api/session/kaggle_fixture/annotated.mp4', headers={'Range':'bytes=2-5'})
+    assert partial.status_code == 206 and partial.content == b'deo-'
+    assert partial.headers['content-range'] == 'bytes 2-5/13'
+    assert client.get('/api/session/kaggle_fixture/annotated.mp4', headers={'Range':'bytes=-7'}).content == b'fixture'
+    assert client.get('/api/session/kaggle_fixture/annotated.mp4', headers={'Range':'bytes=99-100'}).status_code == 416
+    head = client.head('/api/session/kaggle_fixture/annotated.mp4')
+    assert head.status_code == 200 and head.content == b'' and head.headers['content-length'] == '13'
+    assert client.get('/api/session/kaggle_fixture/annotated.mp4?download=true').headers['content-disposition'].startswith('attachment')
+    for path in ['kaggle_fixture/frames/-1','kaggle_fixture/frames/1','unknown/frames/0']:
+        assert client.get('/api/session/'+path).status_code == 404

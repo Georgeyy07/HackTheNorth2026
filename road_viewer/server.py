@@ -5,14 +5,13 @@ from functools import lru_cache
 import gzip
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response, RedirectResponse
+from fastapi import FastAPI, HTTPException, Body, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response, StreamingResponse, RedirectResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -72,6 +71,8 @@ UPDATE_FIELDS = ["target_patch", "start_s", "end_s", "available_s", "probability
                  "valid", "event_id", "event_transition", "target_latitude_deg",
                  "target_longitude_deg", "target_gps_valid", "target_gps_fix_index",
                  "target_gps_age_s", "context_spread", "original_probability", "score_kind"]
+UPDATE_FIELDS += ["quality_probability", "quality_name", "quality_calibration_id",
+                  "calibration_id", "calibration_offset", "settling", "provider"]
 
 
 def read(path):
@@ -114,7 +115,7 @@ def ensure_default_export(export_dir: Path):
     (export_dir / 'manifest.json').write_text(json.dumps(manifest))
 
 
-def create_app(export=None, filters=None):
+def create_app(export=None, filters=None, inference_service=None, vision_service=None):
     export_given = export is not None or "ROAD_VIEWER_EXPORT" in os.environ
     export = Path(export or os.environ.get("ROAD_VIEWER_EXPORT", EXPORT)).resolve()
     filters = Path(filters or os.environ.get("ROAD_VIEWER_FILTERS", FILTERS)).resolve()
@@ -127,7 +128,17 @@ def create_app(export=None, filters=None):
     profile_file = filters / "viewer_profiles.json"
     profiles = read(profile_file)["profiles"] if profile_file.exists() else [dict(id="original", label="Original post-processing", config={})]
     profile_lookup = {p["id"]:p for p in profiles}
+    from imu_inference.service import InferenceService, install_routes
+    inference_service = inference_service or InferenceService.from_env()
     app = FastAPI(docs_url=None, redoc_url=None)
+    from road_viewer.fleet import install_fleet_routes
+    fleet_enabled = install_fleet_routes(app, os.environ.get("ROAD_VIEWER_FLEET"), HERE)
+    from road_viewer.navigation import install_navigation_routes
+    install_navigation_routes(app, HERE)
+    install_routes(app, inference_service)
+    from vision_inference.service import VisionService, install_routes as install_vision_routes
+    vision_service = vision_service or VisionService.from_env()
+    install_vision_routes(app, vision_service)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -173,17 +184,24 @@ def create_app(export=None, filters=None):
         # event state and scores must be reconstructed from available updates.
         signals = json.loads(samples.to_json(orient="split", index=False, double_precision=15))
         fixes = json.loads(gps[["time_s", "latitude_deg", "longitude_deg"]].to_json(orient="values", double_precision=15))
+        vision_file = folder / "vision.json"
         result = dict(session=meta, profile=profile_lookup[profile], signals=signals, gps=fixes, updates=updates,
+                      vision=read(vision_file) if vision_file.is_file() else None,
                       duration_s=max(meta["duration_s"], max((u["available_s"] for u in updates), default=0.)),
                       sample_rate_hz=100, gps_max_age_s=3.)
         return json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
 
-    # Initialize Tiger Data database
-    try:
-        init_db()
-        seed_sample_potholes()
-    except Exception as e:
-        pass
+    # Bootstrap demo data only for the local legacy store. Cloud schema changes
+    # belong to their owning service; IMU inference uses additive tables above.
+    cloud_database = any(os.environ.get(k) for k in ("DATABASE_URL", "TIGER_DATA_URL", "POSTGRES_URL"))
+    cloud_database |= os.environ.get("IMU_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    cloud_database |= os.environ.get("VISION_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    if not cloud_database:
+        try:
+            init_db()
+            seed_sample_potholes()
+        except Exception:
+            logger.warning("Local demo pothole store could not be initialized")
 
     @app.get("/api/catalog")
     def catalog():
@@ -574,7 +592,52 @@ def create_app(export=None, filters=None):
     @app.get("/api/session/{session_id}")
     def session_data(session_id: str, profile: str = "original"):
         return Response(payload(session_id, profile), media_type="application/json",
-                        headers={"Cache-Control": "private, max-age=3600"})
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/session/{session_id}/frames/{frame_index}")
+    def camera_frame(session_id: str, frame_index: int):
+        if frame_index < 0:
+            raise HTTPException(404, "Unknown frame")
+        path = session_folder(session_id) / "frames" / f"{frame_index:06d}.jpg"
+        if not path.is_file():
+            raise HTTPException(404, "Unknown frame")
+        return FileResponse(path, media_type="image/jpeg")
+
+    @app.api_route("/api/session/{session_id}/annotated.mp4", methods=["GET", "HEAD"])
+    def annotated_video(session_id: str, request: Request, download: bool = False):
+        path = session_folder(session_id) / "annotated.mp4"
+        if not path.is_file():
+            raise HTTPException(404, "Annotated video is not available")
+        # The pinned Starlette version predates FileResponse byte-range support.
+        # Serve ranges explicitly so the browser can seek long annotated clips.
+        size = path.stat().st_size
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+        range_header = request.headers.get("range")
+        if not range_header or request.method == "HEAD":
+            if request.method == "HEAD":
+                return Response(media_type="video/mp4", headers=headers)
+            return FileResponse(path, media_type="video/mp4", filename=f"{session_id}_inference.mp4",
+                                content_disposition_type="attachment" if download else "inline", headers=headers)
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+        if not match or not any(match.groups()):
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        first, last = match.groups()
+        start = int(first) if first else max(0, size-int(last))
+        end = min(size-1, int(last)) if first and last else size-1
+        if start > end or start >= size:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        def chunks():
+            with path.open("rb") as handle:
+                handle.seek(start)
+                remaining = end-start+1
+                while remaining:
+                    chunk = handle.read(min(1024*1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+        headers.update({"Content-Length": str(end-start+1), "Content-Range": f"bytes {start}-{end}/{size}"})
+        return StreamingResponse(chunks(), status_code=206, media_type="video/mp4", headers=headers)
 
     @app.get("/api/updates/{session_id}")
     def download_updates(session_id: str, profile: str = "original"):
@@ -593,11 +656,30 @@ def create_app(export=None, filters=None):
 
     @app.get("/")
     def index():
+        return FileResponse(HERE / ("static/fleet.html" if fleet_enabled else "static/index.html"), headers={"Cache-Control": "no-store"})
+
+    @app.get("/replay")
+    def single_drive_replay():
         return FileResponse(HERE / "static/index.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/favicon.ico", status_code=204)
     def favicon():
         return Response(status_code=204)
+
+    async def handle_camera(payload, websocket, default_frame=0):
+        if vision_service is None:
+            await websocket.send_json({"status": "ok", "type": "camera_ack",
+                                       "frame": payload.get("frame_number", default_frame), "inference": False})
+            return
+        try:
+            await websocket.send_json(await vision_service.process(payload))
+        except ValueError as exc:
+            await websocket.send_json({"status": "error", "type": "camera_ack", "retryable": False,
+                                       "frame_id": payload.get("frame_id"), "message": str(exc)})
+        except Exception:
+            logger.warning("Vision inference or persistence failed")
+            await websocket.send_json({"status": "error", "type": "camera_ack", "retryable": True,
+                "frame_id": payload.get("frame_id"), "message": "Vision inference or persistence unavailable; retry the same frame"})
 
     @app.websocket("/ws/imu")
     async def websocket_imu(websocket: WebSocket):
@@ -605,6 +687,7 @@ def create_app(export=None, filters=None):
         client = websocket.client.host if websocket.client else "unknown"
         logger.info(f"IMU WebSocket connected from {client}")
         total_samples = 0
+        inference_session = None
         try:
             while True:
                 data = await websocket.receive_text()
@@ -614,15 +697,39 @@ def create_app(export=None, filters=None):
                     continue
 
                 if isinstance(payload, dict) and payload.get("type") == "handshake":
-                    logger.info(f"IMU client {client} ({payload.get('client', 'device')}) sent handshake: {payload}")
-                    # print(f"[IMU 100Hz] Client {client} ({payload.get('client', 'device')}) connected and ready to stream", flush=True)
-                    await websocket.send_json({"status": "ready", "server": "road_viewer"})
+                    if inference_service is not None:
+                        try:
+                            inference_session = await inference_service.start(payload)
+                            await websocket.send_json({"status": "ready", "server": "road_viewer",
+                                "session_id": inference_session.id, "inference": True})
+                        except ValueError as exc:
+                            await websocket.send_json({"status": "error", "message": str(exc)})
+                        except Exception:
+                            await websocket.send_json({"status": "error", "message": "Could not create inference session"})
+                    else:
+                        await websocket.send_json({"status": "ready", "server": "road_viewer", "inference": False})
                     continue
 
                 if isinstance(payload, dict) and (payload.get("type") == "camera_frame" or "frame_number" in payload):
-                    frame_num = payload.get("frame_number", 0)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    await handle_camera(payload, websocket)
+                    continue
+
+                if inference_service is not None:
+                    if inference_session is None:
+                        await websocket.send_json({"status": "error", "message": "Send a valid inference handshake first"})
+                        continue
+                    try:
+                        if not isinstance(payload, dict):
+                            raise ValueError("Expected a batch object")
+                        response = await inference_session.process(payload)
+                        total_samples = response["total_samples"]
+                        await websocket.send_json(response)
+                    except ValueError as exc:
+                        await websocket.send_json({"status": "error", "retryable": False, "message": str(exc)})
+                    except Exception:
+                        logger.warning("IMU inference or persistence failed; batch state was not advanced")
+                        await websocket.send_json({"status": "error", "retryable": True,
+                            "message": "Inference or persistence unavailable; retry the same batch"})
                     continue
 
                 if isinstance(payload, dict) and "samples" in payload:
@@ -710,9 +817,7 @@ def create_app(export=None, filters=None):
 
                 if isinstance(payload, dict):
                     frame_count += 1
-                    frame_num = payload.get("frame_number", frame_count)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    await handle_camera(payload, websocket, frame_count)
         except WebSocketDisconnect:
             logger.info(f"Camera WebSocket disconnected from {client} after {frame_count} frames")
         except Exception as exc:

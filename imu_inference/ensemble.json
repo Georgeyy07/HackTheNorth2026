@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "mode": "ordinal",
+  "seeds": [
+    52,
+    53,
+    54,
+    55
+  ],
+  "checkpoints": {
+    "seed52.pt": "04d01f349baf845b03bac41ddb50ff71294ff0e8b9448bf2caca1c3f9d9dc92c",
+    "seed53.pt": "5613469a611580ef23728b3f647f9af918a00d59cc7e88dcd4f603873d04c25d",
+    "seed54.pt": "f5509ed78fd3936e28b49b70b3c619e2a1aaee6dd5d3e1e6c8668b25758579ca",
+    "seed55.pt": "fc4286fa101a5c0b46614447d90ea59f16da3d846a7cb9497b2105fff09a037d"
+  },
+  "input_channels": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "speed"
+  ],
+  "sample_rate_hz": 100,
+  "window_samples": 1024,
+  "patch_samples": 16,
+  "class_names": [
+    "good",
+    "medium",
+    "bad"
+  ],
+  "cutpoints_m_per_km": [
+    1.4993686868686869,
+    2.683080808080808
+  ],
+  "normalization": "Masked per-window instance normalization with statistics for both heads",
+  "aggregation": "Equal mean of class probabilities and sigmoid disturbance probabilities; ordinal median class decision",
+  "weights": "Inference-only copies; every trained tensor preserved exactly",
+  "provenance": {
+    "52": {
+      "source_checkpoint_sha256": "f2404a236384c51da8681482b095f0457ba85943d6af3a7bd9c6f3b412daf142",
+      "selected_ordinal_epoch": 8
+    },
+    "53": {
+      "source_checkpoint_sha256": "441ac95c92bb79463f0d78b4fb9bad7f21482140e140e11af5495c3f877d9f9c",
+      "selected_ordinal_epoch": 0
+    },
+    "54": {
+      "source_checkpoint_sha256": "18b016c1553d93d4bd3732c4c15e41bf0f59c9477369f003b0031c1978d6f730",
+      "selected_ordinal_epoch": 0
+    },
+    "55": {
+      "source_checkpoint_sha256": "e1d26035f4e961ee5912d4e7ad3ec097f4418799b60696bd1aafdd23ed23fb2a",
+      "selected_ordinal_epoch": 0
+    }
+  }
+}

@@ -27,6 +27,8 @@
       <div class="heading-controls"><div class="drive-picker"><label for="session">TEST RECORDING</label><select id="session" disabled><option>Loading recordings…</option></select><span id="session-meta">9 drives · Kaggle + LiRA</span></div><div class="drive-picker profile-picker"><label for="profile">DISTURBANCE POST-PROCESSING</label><select id="profile" disabled><option value="original">Original post-processing</option></select><span id="profile-note">Consensus + hysteresis</span></div></div>
     </section>
 
+    <p id="inference-status" class="inference-status" hidden role="status"></p>
+
     <section class="workspace" aria-label="Map and current predictions">
       <div class="map-panel">
         <div id="map" aria-label="Map of the driven route and predicted road conditions"></div>
@@ -42,8 +44,8 @@
       <aside class="telemetry">
         <div class="telemetry-title"><span>LIVE READOUT</span><span id="final-status" class="small-pill">Waiting for context</span></div>
         <section class="roughness-card">
-          <div class="card-label">Overall road quality <span title="Predicted International Roughness Index, metres per kilometre">ⓘ</span></div>
-          <div class="quality-value"><strong id="iri">—</strong><span>m/km<span class="unit-caption">estimated IRI</span></span><span id="quality-badge" class="quality-badge">Waiting</span></div>
+          <div class="card-label"><span id="quality-title">Overall road quality</span> <span title="Ordinal sessions show a relative roughness score; historical IRI sessions show metres per kilometre">ⓘ</span></div>
+          <div class="quality-value"><strong id="iri">—</strong><span id="quality-unit">m/km<span class="unit-caption">estimated IRI</span></span><span id="quality-badge" class="quality-badge">Waiting</span></div>
           <div class="quality-scale"><span></span><span></span><span></span><span></span><i id="quality-pointer"></i></div>
           <div class="scale-labels"><span>Smoother</span><span>Rougher</span></div>
           <div class="prediction-footnote" id="quality-note">Waiting for the first finalized estimate</div>
@@ -119,6 +121,13 @@
       </aside>
     </section>
 
+    <section id="vision-panel" class="vision-panel" hidden aria-label="Road camera detections">
+      <div class="chart-heading"><h2>Road camera · YOLO26</h2><button id="next-pothole" class="text-button" disabled>Next camera detection ↦</button><a id="annotated-video" class="text-button" hidden target="_blank" rel="noopener">Open inference video ↗</a><span id="vision-time"></span></div>
+      <p id="vision-summary"></p>
+      <div class="vision-stage"><img id="vision-image" hidden alt="Road camera"><div id="vision-boxes"></div><p id="vision-empty">No sampled video frame at this time</p></div>
+      <p id="vision-alignment"></p>
+    </section>
+
     <section class="signals" aria-label="Live sensor and model time series">
       <div class="chart-card"><div class="chart-heading"><h2>Accelerometer <span>m/s²</span></h2><div class="axis-legend"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div></div><canvas id="acc-chart" aria-label="Accelerometer readings in the last 12 seconds"></canvas><div class="chart-footer"><span>Includes gravity</span><span>100 Hz · last 12 s</span></div></div>
       <div class="chart-card"><div class="chart-heading"><h2>Gyroscope <span>rad/s</span></h2><div class="axis-legend"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div></div><div class="chart-body"><canvas id="gyro-chart" aria-label="Gyroscope readings in the last 12 seconds"></canvas><div id="gyro-missing" class="missing-chart" hidden>Gyroscope not recorded<span>This LiRA drive contains acceleration and speed.</span></div></div><div class="chart-footer"><span id="gyro-footer">Recorded sensor axes</span><span>100 Hz · last 12 s</span></div></div>
@@ -133,7 +142,7 @@
     <footer class="page-footer"><span><i></i> Four-model ensemble · 10.24 s context · 320 ms finalization delay</span><span>Recorded predictions, replayed by availability time. <button id="method-button">How it works ↗</button></span></footer>
   </main>
 
-  <dialog id="about-dialog"><button id="close-about" class="dialog-close" aria-label="Close information">×</button><div class="eyebrow">ABOUT THIS REPLAY</div><h2>A drive, seen through the model.</h2><p>This is a real-time replay of recorded test data and precomputed predictions from the trained four-model ensemble. No new neural-network inference runs in your browser.</p><h3>What appears when?</h3><p>The car follows already observed GPS fixes. Predictions appear only after their exported availability timestamps. Final decisions combine overlapping contexts and arrive 320 ms after the target patch ends, plus any sensor interpolation wait. Hardware and network latency are not added.</p><h3>Reading the map</h3><p>Road colors show final estimated IRI using the project's bins: good below 2, medium 2–4, bad 4–6, and terrible from 6 m/km. Hollow dots are provisional. Coral markers show finalized disturbance onsets. GPS gaps over three seconds hide the current car; no future fixes fill gaps.</p><h3>What the labels can tell us</h3><p>The disturbance head detects a combined category of manholes, cracks, bumps and depressions. It is not a dedicated pothole classifier. Kaggle has disturbance labels but no measured IRI. LiRA has section IRI but no disturbance labels, and no gyroscope. The last two patches and any incomplete tail stay provisional.</p><p class="dialog-tip">Space: play/pause · ← / →: move 5 seconds · Use the timeline to explore any point in a drive.</p></dialog>
+  <dialog id="about-dialog"><button id="close-about" class="dialog-close" aria-label="Close information">×</button><div class="eyebrow">ABOUT THIS REPLAY</div><h2>A drive, seen through the model.</h2><p>This is a replay of recorded sensor data and precomputed predictions. Phone recordings use the original four-model ensemble with saved quality calibration and Kalman post-processing. The recording details identify whether inference ran locally or on Baseten. Camera detections appear only when a video inference export is present. No new neural-network inference runs in your browser.</p><h3>What appears when?</h3><p>The car follows already observed GPS fixes. Predictions appear only after their exported availability timestamps. Final decisions combine overlapping contexts and arrive 320 ms after the target patch ends, plus any sensor interpolation wait. Hardware and network latency are not added.</p><h3>Reading the map</h3><p>For phone sessions, road colors show calibrated good/medium/bad classes. The 0–100 score is the expected ordinal grade scaled to 100, not physical IRI. Camera boxes show sampled YOLO detections with approximate video timing. For historical numeric IRI datasets, the bins are: good below 2, medium 2–4, bad 4–6, and terrible from 6 m/km. Hollow dots are provisional. Coral markers show finalized disturbance onsets. GPS gaps over three seconds hide the current car; no future fixes fill gaps.</p><h3>What the labels can tell us</h3><p>The disturbance head detects a combined category of manholes, cracks, bumps and depressions. It is not a dedicated pothole classifier. Kaggle has disturbance labels but no measured IRI. LiRA has section IRI but no disturbance labels, and no gyroscope. The last two patches and any incomplete tail stay provisional.</p><p class="dialog-tip">Space: play/pause · ← / →: move 5 seconds · Use the timeline to explore any point in a drive.</p></dialog>
   <script src="/vendor/leaflet/leaflet.js"></script><script type="module" src="/static/app.js"></script>
 </body>
 </html>

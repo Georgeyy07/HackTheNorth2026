@@ -1,0 +1,12 @@
+{
+  "model_id": "31l2451q",
+  "deployment_id": "w60x715",
+  "model_name": "roughroute-yolo26-potholes",
+  "team": "Hack the North",
+  "predict_url": "https://model-31l2451q.api.baseten.co/deployment/w60x715/predict",
+  "source_training_project": "wx42dyq",
+  "source_training_job": "32oo70w",
+  "checkpoint_sha256": "d5c7326eb9274d663b94e955bd373854a7b175c4a746df23a761c3f1687c7445",
+  "source_file": "/home/origami/pothole/best.pt",
+  "checkpoint_source": "user-provided-file"
+}

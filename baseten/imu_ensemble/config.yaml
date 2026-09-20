@@ -1,0 +1,15 @@
+model_name: roughroute-imu-original-ensemble
+python_version: py311
+requirements:
+  - --extra-index-url https://download.pytorch.org/whl/cpu
+  - torch==2.9.0+cpu
+  - numpy==1.26.4
+resources:
+  cpu: "2"
+  memory: 4Gi
+  use_gpu: false
+environment_variables:
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+model_metadata:
+  description: Original four-model IMU ordinal ensemble. Calibration and temporal filters run in FastAPI.

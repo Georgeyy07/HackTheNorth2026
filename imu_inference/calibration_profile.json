@@ -1,0 +1,7 @@
+{
+  "id": "phone_same_car_20260920",
+  "method": "ordinal_logit_offset",
+  "offset": 2.7712255020116716,
+  "label": "Calibrated for this car",
+  "reference": "Session4 good-road reference, 5:30\u20136:00; shared car and phone mount in sessions1\u20134"
+}

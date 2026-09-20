@@ -1,0 +1,19 @@
+model_name: roughroute-yolo26-potholes
+python_version: py311
+requirements:
+  - --extra-index-url https://download.pytorch.org/whl/cpu
+  - torch==2.9.0+cpu
+  - torchvision==0.24.0+cpu
+  - numpy==1.26.4
+  - ultralytics==8.4.155
+  - opencv-python-headless==4.10.0.84
+system_packages:
+  - libgl1
+  - libglib2.0-0
+resources:
+  cpu: "2"
+  memory: 4Gi
+  use_gpu: false
+environment_variables:
+  YOLO_AUTOINSTALL: "false"
+  OMP_NUM_THREADS: "2"

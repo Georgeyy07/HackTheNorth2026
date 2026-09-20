@@ -44,5 +44,17 @@ playwright-report/
 *.key
 .ssh/
 
-# Claude Code local state (from adding-dockerfile)
-.claude/
+# Generated Baseten archive contents; canonical code and weight manifest are tracked.
+/baseten/imu_ensemble/data/
+/baseten/imu_ensemble/packages/
+
+# Portable, checksum-verified original deployment ensemble (about 12 MB total).
+!/models/ordinal_pvs/seed52.pt
+!/models/ordinal_pvs/seed53.pt
+!/models/ordinal_pvs/seed54.pt
+!/models/ordinal_pvs/seed55.pt
+
+# Imported YOLO checkpoint and generated Truss package.
+!/models/yolo26/best.pt
+/baseten/yolo26/data/
+/baseten/yolo26/packages/

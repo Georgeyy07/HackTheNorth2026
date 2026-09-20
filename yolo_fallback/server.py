@@ -1,62 +1,41 @@
+"""FastAPI fallback adapted from adding-dockerfile; missing weights fail startup."""
+import base64
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
+from fastapi import FastAPI, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
+from vision_inference.contract import MAX_IMAGE_BYTES
 
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from fastapi import FastAPI, UploadFile
-import numpy as np
 
-# dsn=None (SENTRY_DSN unset) makes the SDK a safe no-op instead of erroring,
-# so this is always safe to leave in -- same pattern as road_viewer/server.py.
-sentry_sdk.init(
-    dsn=os.environ.get("SENTRY_DSN"),
-    integrations=[FastApiIntegration()],
-    traces_sample_rate=1.0,
-)
+def create_app(predictor=None):
+    @asynccontextmanager
+    async def lifespan(app):
+        nonlocal predictor
+        if predictor is None:
+            from vision_inference.model import YoloPredictor
+            weights = os.environ.get('YOLO_WEIGHTS', str(Path(__file__).resolve().parents[1]/'models/yolo26/best.pt'))
+            predictor = YoloPredictor(weights)
+        if os.environ.get('SENTRY_DSN'):
+            import sentry_sdk
+            sentry_sdk.init(dsn=os.environ['SENTRY_DSN'], send_default_pii=False, traces_sample_rate=.1)
+        yield
 
-app = FastAPI()
+    app = FastAPI(lifespan=lifespan)
 
-MODEL_PATH = Path(__file__).parent / "best.pt"
-model = None
-if MODEL_PATH.exists():
-    from ultralytics import YOLO
-    model = YOLO(str(MODEL_PATH))
+    @app.get('/health')
+    def health():
+        return dict(status='ok', model_loaded=predictor is not None)
 
-@app.post("/predict")
-async def predict(file: UploadFile):
-    contents = await file.read()
+    @app.post('/predict')
+    async def predict(file: UploadFile):
+        contents = await file.read(MAX_IMAGE_BYTES + 1)
+        await file.close()
+        if len(contents) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, 'Image exceeds 4 MiB')
+        try:
+            return await run_in_threadpool(predictor.predict, {'image': base64.b64encode(contents).decode()})
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
-    if model is None:
-        # Stub mode: no trained weights yet. Returns a fake detection so the
-        # Cloud Run -> fallback -> caller pipeline can be tested end-to-end
-        # before Armaan's model exists.
-        return {
-            "detections": [
-                {"box": [100.0, 120.0, 240.0, 260.0], "conf": 0.42, "cls": 0}
-            ],
-            "stub": True,
-        }
-
-    import cv2
-    with sentry_sdk.start_span(op="inference", name="yolo_fallback.predict"):
-        data = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        if img is None:
-            sentry_sdk.capture_message(
-                f"yolo_fallback: cv2.imdecode failed for upload "
-                f"'{file.filename}' ({len(contents)} bytes)",
-                level="error",
-            )
-            return {"detections": [], "stub": False, "error": "could not decode image"}
-        results = model(img)[0]
-    return {
-        "detections": [
-            {"box": b.xyxy[0].tolist(), "conf": float(b.conf[0]), "cls": int(b.cls[0])}
-            for b in results.boxes
-        ],
-        "stub": False,
-    }
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "model_loaded": model is not None}
+    return app
