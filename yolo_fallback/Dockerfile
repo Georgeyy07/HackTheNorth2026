@@ -12,6 +12,11 @@ COPY requirements.txt .
 # step finds torch already satisfied and skips the GPU resolution entirely.
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
+# ultralytics pulls in regular opencv-python (needs X11 libs this slim image
+# doesn't have) as its own dependency, even though opencv-python-headless is
+# already in requirements.txt above — whichever installs last wins the `cv2`
+# module slot, so force the headless build back in after everything else.
+RUN pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless
 COPY . .
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
