@@ -14,18 +14,20 @@ train = ["scipy>=1.11", "scikit-learn>=1.3", "tensorboard>=2.14,<3", "matplotlib
 prepare = ["h5py>=3.10", "pandas>=2.1,<3", "scipy>=1.11"]
 viewer = ["fastapi==0.110.0", "uvicorn==0.27.0", "pandas==2.1.4", "pyarrow==22.0.0"]
 alerts = ["fastapi==0.110.0", "uvicorn==0.27.0", "psycopg2-binary>=2.9"]
+vision = ["pillow>=10,<13", "httpx>=0.24,<0.28", "psycopg2-binary>=2.9,<3"]
 inference = ["httpx>=0.24,<0.28", "psycopg2-binary>=2.9,<3"]
 routing = ["osmnx>=2.0", "networkx>=3.0"]
 test = ["pytest>=8", "httpx>=0.24,<0.28"]
 
 [tool.setuptools.packages.find]
-include = ["imu_inference*", "road_training*", "road_viewer*", "alert_service*", "route_planner*"]
-exclude = ["imu_inference.tests*", "road_training.tests*", "road_viewer.tests*", "road_viewer.node_modules*", "alert_service.tests*", "route_planner.tests*"]
+include = ["vision_inference*", "yolo_fallback*", "imu_inference*", "road_training*", "road_viewer*", "alert_service*", "route_planner*"]
+exclude = ["vision_inference.tests*", "imu_inference.tests*", "road_training.tests*", "road_viewer.tests*", "road_viewer.node_modules*", "alert_service.tests*", "route_planner.tests*"]
 
 [tool.setuptools.package-data]
+vision_inference = ["manifest.json"]
 imu_inference = ["ensemble.json", "calibration_profile.json"]
 road_viewer = ["static/*", "package.json", "package-lock.json"]
 
 [tool.pytest.ini_options]
-testpaths = ["imu_inference/tests", "road_training/tests", "road_viewer/tests", "alert_service/tests", "route_planner/tests"]
+testpaths = ["vision_inference/tests", "imu_inference/tests", "road_training/tests", "road_viewer/tests", "alert_service/tests", "route_planner/tests"]
 pythonpath = ["."]

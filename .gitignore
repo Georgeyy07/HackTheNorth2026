@@ -53,3 +53,8 @@ playwright-report/
 !/models/ordinal_pvs/seed53.pt
 !/models/ordinal_pvs/seed54.pt
 !/models/ordinal_pvs/seed55.pt
+
+# Imported YOLO checkpoint and generated Truss package.
+!/models/yolo26/best.pt
+/baseten/yolo26/data/
+/baseten/yolo26/packages/

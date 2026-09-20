@@ -6,6 +6,8 @@ The Baseten deployment on this branch uses the original four-model ordinal Patch
 
 The existing research code below also supports numeric IRI models. Live ordinal inference is implemented in `imu_inference/`, with the original verified weights in `models/ordinal_pvs/`.
 
+The camera path adds YOLO26 inference through Baseten, an optional FastAPI fallback, and transactional Tiger vision/pothole writes. [YOLO integration and checkpoint provenance](docs/yolo-integration.md).
+
 ## Layout
 
 | Path | Purpose |

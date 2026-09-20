@@ -96,7 +96,7 @@ def ensure_default_export(export_dir: Path):
     (export_dir / 'manifest.json').write_text(json.dumps(manifest))
 
 
-def create_app(export=None, filters=None, inference_service=None):
+def create_app(export=None, filters=None, inference_service=None, vision_service=None):
     export_given = export is not None or "ROAD_VIEWER_EXPORT" in os.environ
     export = Path(export or os.environ.get("ROAD_VIEWER_EXPORT", EXPORT)).resolve()
     filters = Path(filters or os.environ.get("ROAD_VIEWER_FILTERS", FILTERS)).resolve()
@@ -113,6 +113,9 @@ def create_app(export=None, filters=None, inference_service=None):
     inference_service = inference_service or InferenceService.from_env()
     app = FastAPI(docs_url=None, redoc_url=None)
     install_routes(app, inference_service)
+    from vision_inference.service import VisionService, install_routes as install_vision_routes
+    vision_service = vision_service or VisionService.from_env()
+    install_vision_routes(app, vision_service)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -167,6 +170,7 @@ def create_app(export=None, filters=None, inference_service=None):
     # belong to their owning service; IMU inference uses additive tables above.
     cloud_database = any(os.environ.get(k) for k in ("DATABASE_URL", "TIGER_DATA_URL", "POSTGRES_URL"))
     cloud_database |= os.environ.get("IMU_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    cloud_database |= os.environ.get("VISION_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
     if not cloud_database:
         try:
             init_db()
@@ -356,6 +360,21 @@ def create_app(export=None, filters=None, inference_service=None):
     def favicon():
         return Response(status_code=204)
 
+    async def handle_camera(payload, websocket, default_frame=0):
+        if vision_service is None:
+            await websocket.send_json({"status": "ok", "type": "camera_ack",
+                                       "frame": payload.get("frame_number", default_frame), "inference": False})
+            return
+        try:
+            await websocket.send_json(await vision_service.process(payload))
+        except ValueError as exc:
+            await websocket.send_json({"status": "error", "type": "camera_ack", "retryable": False,
+                                       "frame_id": payload.get("frame_id"), "message": str(exc)})
+        except Exception:
+            logger.warning("Vision inference or persistence failed")
+            await websocket.send_json({"status": "error", "type": "camera_ack", "retryable": True,
+                "frame_id": payload.get("frame_id"), "message": "Vision inference or persistence unavailable; retry the same frame"})
+
     @app.websocket("/ws/imu")
     async def websocket_imu(websocket: WebSocket):
         await websocket.accept()
@@ -386,9 +405,7 @@ def create_app(export=None, filters=None, inference_service=None):
                     continue
 
                 if isinstance(payload, dict) and (payload.get("type") == "camera_frame" or "frame_number" in payload):
-                    frame_num = payload.get("frame_number", 0)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    await handle_camera(payload, websocket)
                     continue
 
                 if inference_service is not None:
@@ -494,9 +511,7 @@ def create_app(export=None, filters=None, inference_service=None):
 
                 if isinstance(payload, dict):
                     frame_count += 1
-                    frame_num = payload.get("frame_number", frame_count)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    await handle_camera(payload, websocket, frame_count)
         except WebSocketDisconnect:
             logger.info(f"Camera WebSocket disconnected from {client} after {frame_count} frames")
         except Exception as exc:

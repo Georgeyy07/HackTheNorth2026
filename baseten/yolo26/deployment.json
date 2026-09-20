@@ -1,0 +1,21 @@
+{
+  "model_id": "31l2451q",
+  "deployment_id": "wn4epl4",
+  "model_name": "roughroute-yolo26-potholes",
+  "team": "Hack the North",
+  "predict_url": "https://model-31l2451q.api.baseten.co/deployment/wn4epl4/predict",
+  "source_training_project": "wx42dyq",
+  "source_training_job": "32oo70w",
+  "checkpoint_sha256": "d5c7326eb9274d663b94e955bd373854a7b175c4a746df23a761c3f1687c7445",
+  "requested_training_job": "wx22n53",
+  "requested_job_deployed": false,
+  "requested_job_audit": {
+    "status": "TRAINING_JOB_STOPPED",
+    "checkpoint_sync_status": "COMPLETED",
+    "registered_checkpoints": 0,
+    "checkpoint_files": 0,
+    "last_completed_epoch_observed": 6,
+    "configured_epochs": 50,
+    "training_source_exports_weights_only_after_training_returns": true
+  }
+}

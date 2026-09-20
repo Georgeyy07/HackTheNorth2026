@@ -1,0 +1,24 @@
+{
+  "imported_branch_commit": "13cddc31df85611e17e93b9c518112be71c420c6",
+  "model_load": "verified original one-class YOLO26n weights on CPU",
+  "local_cloud_response_match": true,
+  "local_cloud_frame_detections": 0,
+  "fallback_fastapi": "real weights loaded; real JPEG accepted; invalid image rejected",
+  "tiger_smoke": {
+    "frame_id": "f4592bcf-18df-475f-a8f9-ef82dc694d78",
+    "provider": "baseten",
+    "storage": "postgresql",
+    "detections": 0,
+    "retry_idempotent": true,
+    "potholes_created": 0,
+    "imu_enabled": true
+  },
+  "postgres_temporary_schema_test": "passed: pothole insert, confidence and NULL severity, nearby grouping, retry idempotency, JSONB read-back; rolled back",
+  "python_tests_passed": 27,
+  "postgres_test_passed_separately": 1,
+  "mobile_tests_passed": 33,
+  "wheel_metadata_verified": true,
+  "physical_phone_tested": false,
+  "docker_build_tested": false,
+  "scope": "Integration and inference plumbing, not a model accuracy evaluation"
+}

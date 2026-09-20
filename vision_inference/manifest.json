@@ -1,0 +1,18 @@
+{
+  "source_branch": "adding-dockerfile",
+  "source_commit": "13cddc31df85611e17e93b9c518112be71c420c6",
+  "source_path": "yolo_training_inference/weights/best.pt",
+  "checkpoint_sha256": "d5c7326eb9274d663b94e955bd373854a7b175c4a746df23a761c3f1687c7445",
+  "architecture": "yolo26n",
+  "ultralytics_version": "8.4.155",
+  "classes": {
+    "0": "pothole"
+  },
+  "thresholds": {
+    "pothole": 0.4,
+    "crack": 0.2
+  },
+  "note": "Branch best.pt exactly matches the downloadable best.pt from completed training run 32oo70w. It has only the pothole class.",
+  "training_project_id": "wx42dyq",
+  "training_job_id": "32oo70w"
+}
