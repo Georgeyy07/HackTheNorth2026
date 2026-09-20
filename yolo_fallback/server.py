@@ -1,7 +1,18 @@
 import os
 from pathlib import Path
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 from fastapi import FastAPI, UploadFile
 import numpy as np
+
+# dsn=None (SENTRY_DSN unset) makes the SDK a safe no-op instead of erroring,
+# so this is always safe to leave in -- same pattern as road_viewer/server.py.
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    integrations=[FastApiIntegration()],
+    traces_sample_rate=1.0,
+)
 
 app = FastAPI()
 
@@ -27,9 +38,17 @@ async def predict(file: UploadFile):
         }
 
     import cv2
-    data = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-    results = model(img)[0]
+    with sentry_sdk.start_span(op="inference", name="yolo_fallback.predict"):
+        data = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is None:
+            sentry_sdk.capture_message(
+                f"yolo_fallback: cv2.imdecode failed for upload "
+                f"'{file.filename}' ({len(contents)} bytes)",
+                level="error",
+            )
+            return {"detections": [], "stub": False, "error": "could not decode image"}
+        results = model(img)[0]
     return {
         "detections": [
             {"box": b.xyxy[0].tolist(), "conf": float(b.conf[0]), "cls": int(b.cls[0])}
