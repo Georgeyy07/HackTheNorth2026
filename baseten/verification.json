@@ -1,0 +1,34 @@
+{
+  "model_id": "qk54002q",
+  "deployment_id": "woovmmk",
+  "ensemble_sha256": "9c3a84db358bfb6cf1d49cfc79690303134b952531b244b5f826f4a809fb8af8",
+  "max_probability_error": 1.7881393432617188e-07,
+  "request_seconds": 1.5588345527648926,
+  "source": "session1 prepared samples 3000:4024",
+  "original_stream_parity": {
+    "samples": 1600,
+    "updates": 297,
+    "max_probability_error": 0,
+    "missing_patch_tested": true,
+    "calibration_and_events_match": true
+  },
+  "backend_cloud_smoke": {
+    "samples": 320,
+    "finalized_predictions": 18,
+    "storage": "sqlite",
+    "calibration_id": "phone_same_car_20260920",
+    "retry_idempotent": true,
+    "request_seconds": 1.8509034318849444
+  },
+  "live_tiger_verified": true,
+  "tiger_cloud_smoke": {
+    "session_id": "90a689bb-6c3c-4f2d-b3ef-6a7c5345064a",
+    "samples": 320,
+    "finalized_predictions": 18,
+    "storage": "postgresql",
+    "calibration_id": "phone_same_car_20260920",
+    "retry_idempotent": true,
+    "request_seconds": 3.6317903539165854,
+    "batched_insert": true
+  }
+}

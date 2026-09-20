@@ -5,11 +5,13 @@ from functools import lru_cache
 import gzip
 import json
 import os
+import re
 from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, HTTPException, Body, Request, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response, StreamingResponse, RedirectResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -18,17 +20,33 @@ import uvicorn
 import sys
 import time
 import logging
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("road_viewer")
+
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    integrations=[FastApiIntegration()],
+    traces_sample_rate=1.0,
+)
 
 # Ensure repository root is in sys.path when executed directly as a script
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
+from road_viewer.tiger_db import (
+    init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole,
+    add_simulated_detection, get_simulated_detections, get_simulated_detection_by_id, delete_simulated_detection,
+    add_detection, get_detections, get_detection_by_id, delete_detection,
+    seed_simulated_detections, clear_simulated_detections, get_simulated_car_observations,
+    upsert_or_merge_pothole, get_simulated_car_imu_samples
+)
 from alert_service.potholes import fetch_active_potholes, severity_label, invalidate_potholes_cache
+from alert_service.alert_math import haversine_distance_m
+
 from route_planner.cost import RoutingConfig
 from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node, suggest_addresses
 from route_planner.router import find_routes
@@ -55,6 +73,8 @@ UPDATE_FIELDS = ["target_patch", "start_s", "end_s", "available_s", "probability
                  "valid", "event_id", "event_transition", "target_latitude_deg",
                  "target_longitude_deg", "target_gps_valid", "target_gps_fix_index",
                  "target_gps_age_s", "context_spread", "original_probability", "score_kind"]
+UPDATE_FIELDS += ["quality_probability", "quality_name", "quality_calibration_id",
+                  "calibration_id", "calibration_offset", "settling", "provider"]
 
 
 def read(path):
@@ -97,7 +117,7 @@ def ensure_default_export(export_dir: Path):
     (export_dir / 'manifest.json').write_text(json.dumps(manifest))
 
 
-def create_app(export=None, filters=None):
+def create_app(export=None, filters=None, inference_service=None, vision_service=None):
     export_given = export is not None or "ROAD_VIEWER_EXPORT" in os.environ
     export = Path(export or os.environ.get("ROAD_VIEWER_EXPORT", EXPORT)).resolve()
     filters = Path(filters or os.environ.get("ROAD_VIEWER_FILTERS", FILTERS)).resolve()
@@ -110,7 +130,17 @@ def create_app(export=None, filters=None):
     profile_file = filters / "viewer_profiles.json"
     profiles = read(profile_file)["profiles"] if profile_file.exists() else [dict(id="original", label="Original post-processing", config={})]
     profile_lookup = {p["id"]:p for p in profiles}
+    from imu_inference.service import InferenceService, install_routes
+    inference_service = inference_service or InferenceService.from_env()
     app = FastAPI(docs_url=None, redoc_url=None)
+    from road_viewer.fleet import install_fleet_routes
+    fleet_enabled = install_fleet_routes(app, os.environ.get("ROAD_VIEWER_FLEET"), HERE)
+    from road_viewer.navigation import install_navigation_routes
+    install_navigation_routes(app, HERE)
+    install_routes(app, inference_service)
+    from vision_inference.service import VisionService, install_routes as install_vision_routes
+    vision_service = vision_service or VisionService.from_env()
+    install_vision_routes(app, vision_service)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -156,17 +186,24 @@ def create_app(export=None, filters=None):
         # event state and scores must be reconstructed from available updates.
         signals = json.loads(samples.to_json(orient="split", index=False, double_precision=15))
         fixes = json.loads(gps[["time_s", "latitude_deg", "longitude_deg"]].to_json(orient="values", double_precision=15))
+        vision_file = folder / "vision.json"
         result = dict(session=meta, profile=profile_lookup[profile], signals=signals, gps=fixes, updates=updates,
+                      vision=read(vision_file) if vision_file.is_file() else None,
                       duration_s=max(meta["duration_s"], max((u["available_s"] for u in updates), default=0.)),
                       sample_rate_hz=100, gps_max_age_s=3.)
         return json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
 
-    # Initialize Tiger Data database
-    try:
-        init_db()
-        seed_sample_potholes()
-    except Exception as e:
-        pass
+    # Bootstrap demo data only for the local legacy store. Cloud schema changes
+    # belong to their owning service; IMU inference uses additive tables above.
+    cloud_database = any(os.environ.get(k) for k in ("DATABASE_URL", "TIGER_DATA_URL", "POSTGRES_URL"))
+    cloud_database |= os.environ.get("IMU_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    cloud_database |= os.environ.get("VISION_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    if not cloud_database:
+        try:
+            init_db()
+            seed_sample_potholes()
+        except Exception:
+            logger.warning("Local demo pothole store could not be initialized")
 
     @app.get("/api/catalog")
     def catalog():
@@ -182,13 +219,22 @@ def create_app(export=None, filters=None):
     def create_pothole(payload: dict = Body(...)):
         if "latitude" not in payload or "longitude" not in payload:
             raise HTTPException(400, "Latitude and Longitude are required")
-        new_record = add_pothole(
+        result = upsert_or_merge_pothole(
             latitude=float(payload["latitude"]),
             longitude=float(payload["longitude"]),
-            severity=str(payload.get("severity", "MEDIUM"))
+            severity=str(payload.get("severity", "MEDIUM")),
+            confidence=float(payload.get("confidence", 0.85)),
+            detected_by_vision=bool(payload.get("detected_by_vision", payload.get("yolo", False))),
+            detected_by_imu=bool(payload.get("detected_by_imu", payload.get("imu", False))),
+            radius_m=15.0,
         )
         invalidate_potholes_cache()
-        return new_record
+        resp_data = dict(result.get("pothole") or {})
+        resp_data["status"] = result.get("status", "inserted")
+        resp_data["merged"] = (result.get("status") == "merged")
+        resp_data["merged_with_id"] = result.get("merged_with_id")
+        resp_data["distance_m"] = result.get("distance_m")
+        return resp_data
 
     @app.put("/api/potholes/{pothole_id}")
     def modify_pothole(pothole_id: int, payload: dict = Body(...)):
@@ -216,6 +262,219 @@ def create_app(export=None, filters=None):
         seed_sample_potholes()
         invalidate_potholes_cache()
         return {"status": "ok", "potholes": get_potholes()}
+
+    @app.get("/api/simulated-detections")
+    @app.get("/api/simulated_detections")
+    @app.get("/api/detections")
+    def list_simulated_detections(
+        car_id: Optional[str] = None,
+        imu: Optional[bool] = None,
+        yolo: Optional[bool] = None,
+        order: str = "desc",
+        limit: int = 500,
+    ):
+        return get_simulated_detections(car_id=car_id, imu=imu, yolo=yolo, order=order, limit=limit)
+
+    @app.get("/api/simulated-car-observations")
+    @app.get("/api/car-observations")
+    def list_simulated_car_observations(
+        scenario: str = "staggered",
+        car_id: Optional[str] = None,
+        order: str = "asc",
+        limit: int = 50000,
+    ):
+        return get_simulated_car_observations(
+            car_id=car_id,
+            scenario=scenario,
+            order=order,
+            limit=limit,
+        )
+
+    @app.get("/api/simulated-car-imu-samples")
+    @app.get("/api/imu-samples")
+    def list_simulated_car_imu_samples(
+        car_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        window_seconds: float = 5.0,
+        stride: int = 1,
+    ):
+        return get_simulated_car_imu_samples(
+            car_id=car_id,
+            timestamp=timestamp,
+            window_seconds=window_seconds,
+            stride=stride,
+        )
+
+    @app.get("/api/fleet-sync")
+    def fleet_video_sync_endpoint():
+        # If user downloaded video_sync.json to demo_view/videos or repo, load it
+        sync_candidates = [
+            ROOT / "demo_view" / "videos" / "video_sync.json",
+            ROOT / "demo_view" / "video_sync.json",
+            ROOT / "reports" / "fleet_sessions_2_5" / "video_sync.json",
+        ]
+        for p in sync_candidates:
+            if p.is_file():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.warning(f"Error reading {p}: {e}")
+
+        # Built-in specification matching the developer handoff doc
+        return {
+            "start": "2026-09-20T12:00:00Z",
+            "sessions": {
+                "session2": {"duration": 482.0, "videoOffsetSeconds": 0.378, "url": "/demo_view/videos/session2.mp4"},
+                "session3": {"duration": 245.0, "videoOffsetSeconds": 0.438, "url": "/demo_view/videos/session3.mp4"},
+                "session4": {"duration": 310.0, "videoOffsetSeconds": 0.363, "url": "/demo_view/videos/session4.mp4"},
+                "session5": {"duration": 140.0, "videoOffsetSeconds": 0.614, "url": "/demo_view/videos/session5.mp4"}
+            },
+            "gaps": {
+                "session2_3": 1.610,
+                "session3_4": 5.615,
+                "session4_5": 3.919
+            },
+            "staggered": {
+                "sim-waterloo-2to5-staggered-01": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-staggered-02": {"firstSession": "session3", "imuStartSeconds": 0.320, "videoAtLaunchSeconds": 0.118, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-staggered-03": {"firstSession": "session4", "imuStartSeconds": 0.320, "videoAtLaunchSeconds": 0.043, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-staggered-04": {"firstSession": "session5", "imuStartSeconds": 0.320, "videoAtLaunchSeconds": 0.294, "launchDelaySeconds": 0}
+            },
+            "cascade": {
+                "sim-waterloo-2to5-cascade-01": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-cascade-02": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 20},
+                "sim-waterloo-2to5-cascade-03": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 40},
+                "sim-waterloo-2to5-cascade-04": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 60}
+            }
+        }
+
+    @app.post("/api/simulated-detections/seed")
+    @app.post("/api/simulated_detections/seed")
+    def seed_detections_endpoint(payload: Optional[dict] = Body(None)):
+        clear = True if payload is None else payload.get("clear_existing", True)
+        records = seed_simulated_detections(clear_existing=clear)
+        return {
+            "status": "ok",
+            "count": len(records),
+            "records": records,
+            "vehicles": list(set(r["car_id"] for r in records))
+        }
+
+    @app.post("/api/simulated-detections/clear")
+    @app.post("/api/simulated_detections/clear")
+    @app.delete("/api/simulated-detections")
+    @app.delete("/api/simulated_detections")
+    def clear_detections_endpoint(car_id: Optional[str] = None):
+        count = clear_simulated_detections(car_id=car_id)
+        return {"status": "ok", "cleared": count}
+
+    @app.post("/api/simulated-detections/ingest")
+    @app.post("/api/simulated_detections/ingest")
+    def ingest_anomaly_to_pothole(payload: dict = Body(...)):
+        lat = payload.get("latitude") if payload.get("latitude") is not None else payload.get("lattitude")
+        lon = payload.get("longitude")
+        if lat is None or lon is None:
+            raise HTTPException(400, "latitude and longitude are required")
+
+        lat = float(lat)
+        lon = float(lon)
+        imu_val = bool(payload.get("imu", False))
+        yolo_val = bool(payload.get("yolo", False))
+        car_id = str(payload.get("car_id", "simulated_car"))
+
+        # Check if nearby active pothole already exists (within 15 meters)
+        active = fetch_active_potholes(force_refresh=True)
+        for p in active:
+            dist = haversine_distance_m(lat, lon, p.lat, p.lon)
+            if dist <= 15.0:
+                return {
+                    "status": "already_exists",
+                    "message": f"Pothole already exists {round(dist, 1)}m away",
+                    "pothole": {
+                        "id": p.id,
+                        "latitude": p.lat,
+                        "longitude": p.lon,
+                        "severity": severity_label(p.severity),
+                    },
+                }
+
+        # Determine severity and confidence based on sensor agreement
+        if imu_val and yolo_val:
+            severity = "CRITICAL"
+            confidence = 0.95
+        elif imu_val:
+            severity = "MEDIUM"
+            confidence = 0.75
+        elif yolo_val:
+            severity = "MEDIUM"
+            confidence = 0.70
+        else:
+            severity = payload.get("severity", "LOW")
+            confidence = 0.50
+
+        new_pothole = add_pothole(
+            latitude=lat,
+            longitude=lon,
+            severity=severity,
+            confidence=confidence,
+            detected_by_vision=yolo_val,
+            detected_by_imu=imu_val,
+        )
+        invalidate_potholes_cache()
+        return {
+            "status": "created",
+            "message": f"Ingested {severity} pothole into central database",
+            "pothole": new_pothole,
+        }
+
+    @app.get("/api/simulated-detections/{detection_id}")
+    @app.get("/api/simulated_detections/{detection_id}")
+    @app.get("/api/detections/{detection_id}")
+    def fetch_simulated_detection(detection_id: int):
+        record = get_simulated_detection_by_id(detection_id)
+        if not record:
+            raise HTTPException(404, "Simulated detection not found")
+        return record
+
+    @app.post("/api/simulated-detections")
+    @app.post("/api/simulated_detections")
+    @app.post("/api/detections")
+    def create_simulated_detection(payload: dict = Body(...)):
+        lat = payload.get("latitude") if payload.get("latitude") is not None else payload.get("lattitude")
+        lon = payload.get("longitude")
+        car_id = payload.get("car_id")
+        if lat is None or lon is None or car_id is None:
+            raise HTTPException(400, "latitude, longitude, and car_id are required")
+
+        ts = payload.get("timestamp")
+        if ts is None:
+            ts = int(time.time() * 1000)
+
+        imu_val = bool(payload.get("imu", False))
+        yolo_val = bool(payload.get("yolo", False))
+        rq = payload.get("road_quality")
+
+        new_record = add_simulated_detection(
+            timestamp=int(ts),
+            imu=imu_val,
+            yolo=yolo_val,
+            latitude=float(lat),
+            longitude=float(lon),
+            car_id=str(car_id),
+            road_quality=rq,
+        )
+        return new_record
+
+    @app.delete("/api/simulated-detections/{detection_id}")
+    @app.delete("/api/simulated_detections/{detection_id}")
+    @app.delete("/api/detections/{detection_id}")
+    def remove_simulated_detection(detection_id: int):
+        success = delete_simulated_detection(detection_id)
+        if not success:
+            raise HTTPException(404, "Simulated detection not found")
+        return {"status": "ok", "deleted_id": detection_id}
+
 
     @app.get("/api/geocode/suggest")
     def geocode_suggest(q: str, limit: int = 5):
@@ -335,7 +594,69 @@ def create_app(export=None, filters=None):
     @app.get("/api/session/{session_id}")
     def session_data(session_id: str, profile: str = "original"):
         return Response(payload(session_id, profile), media_type="application/json",
-                        headers={"Cache-Control": "private, max-age=3600"})
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/session/{session_id}/frames/{frame_index}")
+    def camera_frame(session_id: str, frame_index: int):
+        if frame_index < 0:
+            raise HTTPException(404, "Unknown frame")
+        path = session_folder(session_id) / "frames" / f"{frame_index:06d}.jpg"
+        if not path.is_file():
+            raise HTTPException(404, "Unknown frame")
+        return FileResponse(path, media_type="image/jpeg")
+
+    @lru_cache(maxsize=4)
+    def recording_imu(session_id):
+        folder = session_folder(session_id)
+        samples = pd.read_parquet(folder / "samples.parquet",
+                                  columns=["time_s", "accel_x", "accel_y", "accel_z", "speed"])
+        vision = read(folder / "vision.json")
+        return samples, float(vision["video_offset_s"])
+
+    @app.get("/api/session/{session_id}/imu-window")
+    def recording_imu_window(session_id: str, time_s: float = Query(ge=0, allow_inf_nan=False)):
+        samples, video_offset = recording_imu(session_id)
+        window = samples.loc[(samples.time_s >= time_s - 5) & (samples.time_s <= time_s + 5)].copy()
+        window["rel_s"] = window.time_s - time_s
+        return {"session": session_id, "center_s": time_s, "video_offset_s": video_offset,
+                "samples": json.loads(window.to_json(orient="records"))}
+
+    @app.api_route("/demo_view/videos/{session_id}.mp4", methods=["GET", "HEAD"])
+    @app.api_route("/api/session/{session_id}/annotated.mp4", methods=["GET", "HEAD"])
+    def annotated_video(session_id: str, request: Request, download: bool = False):
+        path = session_folder(session_id) / "annotated.mp4"
+        if not path.is_file():
+            raise HTTPException(404, "Annotated video is not available")
+        # The pinned Starlette version predates FileResponse byte-range support.
+        # Serve ranges explicitly so the browser can seek long annotated clips.
+        size = path.stat().st_size
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+        range_header = request.headers.get("range")
+        if not range_header or request.method == "HEAD":
+            if request.method == "HEAD":
+                return Response(media_type="video/mp4", headers=headers)
+            return FileResponse(path, media_type="video/mp4", filename=f"{session_id}_inference.mp4",
+                                content_disposition_type="attachment" if download else "inline", headers=headers)
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+        if not match or not any(match.groups()):
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        first, last = match.groups()
+        start = int(first) if first else max(0, size-int(last))
+        end = min(size-1, int(last)) if first and last else size-1
+        if start > end or start >= size:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        def chunks():
+            with path.open("rb") as handle:
+                handle.seek(start)
+                remaining = end-start+1
+                while remaining:
+                    chunk = handle.read(min(1024*1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+        headers.update({"Content-Length": str(end-start+1), "Content-Range": f"bytes {start}-{end}/{size}"})
+        return StreamingResponse(chunks(), status_code=206, media_type="video/mp4", headers=headers)
 
     @app.get("/api/updates/{session_id}")
     def download_updates(session_id: str, profile: str = "original"):
@@ -354,11 +675,30 @@ def create_app(export=None, filters=None):
 
     @app.get("/")
     def index():
+        return FileResponse(HERE / ("static/fleet.html" if fleet_enabled else "static/index.html"), headers={"Cache-Control": "no-store"})
+
+    @app.get("/replay")
+    def single_drive_replay():
         return FileResponse(HERE / "static/index.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/favicon.ico", status_code=204)
     def favicon():
         return Response(status_code=204)
+
+    async def handle_camera(payload, websocket, default_frame=0):
+        if vision_service is None:
+            await websocket.send_json({"status": "ok", "type": "camera_ack",
+                                       "frame": payload.get("frame_number", default_frame), "inference": False})
+            return
+        try:
+            await websocket.send_json(await vision_service.process(payload))
+        except ValueError as exc:
+            await websocket.send_json({"status": "error", "type": "camera_ack", "retryable": False,
+                                       "frame_id": payload.get("frame_id"), "message": str(exc)})
+        except Exception:
+            logger.warning("Vision inference or persistence failed")
+            await websocket.send_json({"status": "error", "type": "camera_ack", "retryable": True,
+                "frame_id": payload.get("frame_id"), "message": "Vision inference or persistence unavailable; retry the same frame"})
 
     @app.websocket("/ws/imu")
     async def websocket_imu(websocket: WebSocket):
@@ -366,6 +706,7 @@ def create_app(export=None, filters=None):
         client = websocket.client.host if websocket.client else "unknown"
         logger.info(f"IMU WebSocket connected from {client}")
         total_samples = 0
+        inference_session = None
         try:
             while True:
                 data = await websocket.receive_text()
@@ -375,15 +716,39 @@ def create_app(export=None, filters=None):
                     continue
 
                 if isinstance(payload, dict) and payload.get("type") == "handshake":
-                    logger.info(f"IMU client {client} ({payload.get('client', 'device')}) sent handshake: {payload}")
-                    # print(f"[IMU 100Hz] Client {client} ({payload.get('client', 'device')}) connected and ready to stream", flush=True)
-                    await websocket.send_json({"status": "ready", "server": "road_viewer"})
+                    if inference_service is not None:
+                        try:
+                            inference_session = await inference_service.start(payload)
+                            await websocket.send_json({"status": "ready", "server": "road_viewer",
+                                "session_id": inference_session.id, "inference": True})
+                        except ValueError as exc:
+                            await websocket.send_json({"status": "error", "message": str(exc)})
+                        except Exception:
+                            await websocket.send_json({"status": "error", "message": "Could not create inference session"})
+                    else:
+                        await websocket.send_json({"status": "ready", "server": "road_viewer", "inference": False})
                     continue
 
                 if isinstance(payload, dict) and (payload.get("type") == "camera_frame" or "frame_number" in payload):
-                    frame_num = payload.get("frame_number", 0)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    await handle_camera(payload, websocket)
+                    continue
+
+                if inference_service is not None:
+                    if inference_session is None:
+                        await websocket.send_json({"status": "error", "message": "Send a valid inference handshake first"})
+                        continue
+                    try:
+                        if not isinstance(payload, dict):
+                            raise ValueError("Expected a batch object")
+                        response = await inference_session.process(payload)
+                        total_samples = response["total_samples"]
+                        await websocket.send_json(response)
+                    except ValueError as exc:
+                        await websocket.send_json({"status": "error", "retryable": False, "message": str(exc)})
+                    except Exception:
+                        logger.warning("IMU inference or persistence failed; batch state was not advanced")
+                        await websocket.send_json({"status": "error", "retryable": True,
+                            "message": "Inference or persistence unavailable; retry the same batch"})
                     continue
 
                 if isinstance(payload, dict) and "samples" in payload:
@@ -471,17 +836,23 @@ def create_app(export=None, filters=None):
 
                 if isinstance(payload, dict):
                     frame_count += 1
-                    frame_num = payload.get("frame_number", frame_count)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    await handle_camera(payload, websocket, frame_count)
         except WebSocketDisconnect:
             logger.info(f"Camera WebSocket disconnected from {client} after {frame_count} frames")
         except Exception as exc:
             logger.warning(f"Camera WebSocket error from {client}: {exc}")
 
+    @app.get("/demo")
+    def demo_redirect():
+        return RedirectResponse(url="/demo_view/")
+
+    demo_dir = ROOT / "demo_view"
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/demo_view", StaticFiles(directory=demo_dir, html=True), name="demo_view")
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     app.mount("/vendor/leaflet", StaticFiles(directory=HERE / "node_modules/leaflet/dist", check_dir=False), name="leaflet")
     return app
+
 
 
 def main():
@@ -491,8 +862,8 @@ def main():
     parser.add_argument("--export", type=Path, help="Replay export directory containing manifest.json")
     parser.add_argument("--filters", type=Path, help="Optional alert profiles directory")
     args = parser.parse_args()
-    if not (HERE / "node_modules/leaflet/dist").is_dir():
-        parser.error("Leaflet is missing. Run npm ci --prefix road_viewer first.")
+    leaflet_dist = HERE / "node_modules/leaflet/dist"
+    leaflet_dist.mkdir(parents=True, exist_ok=True)
     uvicorn.run(create_app(args.export, args.filters), host=args.host, port=args.port, access_log=False)
 
 

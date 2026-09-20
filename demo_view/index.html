@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RoadScope // Fleet Telemetry & Road Anomaly Pitch View</title>
+  <meta name="description"
+    content="Storybook municipal fleet replay showing simulated road anomaly detections, sensor reconciliation, and real-time database ingestion.">
+
+  <!-- Leaflet CSS: Try local vendor first, then fallback to CDN -->
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css"
+    onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <!-- Top Storybook Header & Stats Bar -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="brand-seal" title="RoadScope Fleet Ledger">🌲</div>
+      <div class="brand-titles">
+        <h1>RoadScope Municipal Fleet</h1>
+        <div class="subtitle">Live Sensor Playback, Anomaly Telemetry & Road Quality Ledger</div>
+      </div>
+    </div>
+
+    <div class="header-stats">
+      <div class="stat-chip">
+        <span class="stat-label">Active Fleet</span>
+        <span class="stat-val" id="stat-vehicles">3 Cars</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-label">GPS Pings</span>
+        <span class="stat-val" id="stat-waypoints">0</span>
+      </div>
+      <div class="stat-chip alert-stat">
+        <span class="stat-label">Anomalies</span>
+        <span class="stat-val" id="stat-anomalies">0</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-label">Town Potholes</span>
+        <span class="stat-val" id="stat-potholes">0</span>
+      </div>
+      <div class="db-pill" title="Connected to Timescale PostgreSQL Cloud">
+        <span class="pulse-dot"></span>
+        <span id="db-status-text">TigerDB Cloud</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Map & Floating Telemetry Panels -->
+  <main class="main-container">
+    <div id="map"></div>
+    <section id="navigation-panel" hidden aria-label="Navigation scenario">
+      <h2 id="nav-title"></h2>
+      <p>Columbia Street West → MidCampus Drive</p>
+      <strong id="nav-guidance"></strong>
+      <p id="nav-eta"></p>
+      <div id="nav-alert" hidden role="status"></div>
+      <div id="nav-decision" hidden role="status"></div>
+      <label><input id="nav-voice" type="checkbox" checked> Voice alerts</label>
+      <small id="nav-voice-status"></small>
+      <p class="navigation-assumption">Blue: your car and active route. A/B: recorded reporting cars.<br>
+        Green dashed bypass: assumed-good surface for this demo. Your car's motion is simulated.</p>
+      <h3>Fleet reports</h3><div id="nav-events"></div>
+    </section>
+
+    <!-- Floating Real-Time Anomaly Toast Notification -->
+    <div class="anomaly-toast-banner" id="anomaly-toast">
+      <div class="toast-top">
+        <span class="toast-stamp">🚨 ANOMALY STAMP</span>
+        <span class="toast-vehicle" id="toast-car-id">Car-Alpha</span>
+      </div>
+      <div class="toast-body" id="toast-desc">
+        Road disturbance registered at (43.4725, -80.5420).
+      </div>
+      <div class="toast-pills">
+        <span class="toast-pill imu-pill" id="toast-imu-pill">IMU Shock: Detected</span>
+        <span class="toast-pill yolo-pill" id="toast-yolo-pill">YOLO Vision: Confirmed</span>
+      </div>
+      <div class="toast-ingest-status" id="toast-ingest-status">
+        <span>✍️ Ingesting to Central Pothole Database...</span>
+      </div>
+    </div>
+
+    <!-- Interactive Telemetry & Dashcam Inspector (Appears when clicking a car or road point) -->
+    <aside class="telemetry-inspector" id="telemetry-inspector" style="display: none;">
+      <div class="inspector-header">
+        <div class="inspector-title-group">
+          <span class="inspector-badge" id="inspector-car-badge" style="background: #df6e35;">🚗 Car 01</span>
+          <div class="inspector-subtitle" id="inspector-subtitle">±5.0s Impact Telemetry Window</div>
+        </div>
+        <button class="inspector-close-btn" id="btn-close-inspector" title="Close Inspector">&times;</button>
+      </div>
+
+      <!-- Dashcam Video Section -->
+      <div class="inspector-video-box">
+        <video id="inspector-video" class="inspector-video" muted playsinline preload="auto"></video>
+        <canvas id="inspector-canvas" class="inspector-canvas" width="320" height="160"></canvas>
+        <div class="inspector-buffering-overlay" id="inspector-buffering" style="display: none;">
+          <div class="inspector-spinner"></div>
+          <span id="inspector-buffering-text">Aligning ±5s Video Feed...</span>
+        </div>
+        <div class="dashcam-overlay">
+          <span class="dashcam-hud-text" id="inspector-hud-left">REC // CAM 01</span>
+          <span class="dashcam-hud-text" id="inspector-hud-right">IMPACT 0.0s</span>
+        </div>
+      </div>
+
+      <!-- Window Clip Controls -->
+      <div class="inspector-clip-bar">
+        <button class="wood-button-tiny" id="btn-replay-clip" title="Replay 10-second clip centered on impact">
+          🔄 Replay ±5s Clip
+        </button>
+        <button class="wood-button-tiny" id="btn-live-feed" style="background: #2e7d32;"
+          title="Resume live vehicle video feed">
+          ▶ Live Driving
+        </button>
+        <div class="clip-time-track">
+          <span class="clip-time-tag">-5.0s</span>
+          <div class="clip-progress-bar">
+            <div class="clip-progress-fill" id="clip-progress-fill"></div>
+            <div class="clip-impact-marker" title="Impact Point">⚠️</div>
+          </div>
+          <span class="clip-time-tag">+5.0s</span>
+        </div>
+      </div>
+
+      <!-- Accelerometer / IMU Graph Section -->
+      <div class="inspector-accel-section">
+        <div class="accel-header">
+          <span class="accel-title">⚡ 3-Axis IMU Telemetry (simulated_car_imu_samples)</span>
+          <div class="accel-badges">
+            <span class="accel-chip chip-z" id="chip-accel-z">Z: +2.85g</span>
+            <span class="accel-chip chip-x" id="chip-accel-x">X: +0.18g</span>
+            <span class="accel-chip chip-y" id="chip-accel-y">Y: -0.32g</span>
+          </div>
+        </div>
+        <!-- Oscilloscope / Waveform Canvas -->
+        <div class="accel-canvas-wrapper">
+          <canvas id="accel-waveform-canvas" class="accel-waveform-canvas" width="310" height="70"></canvas>
+          <div class="accel-legend">
+            <span style="color: #d32f2f;">■ Z Vertical Shock</span>
+            <span style="color: #1976d2;">■ X Lateral</span>
+            <span style="color: #388e3c;">■ Y Long.</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Bottom Pitch Playback Deck & Control Center -->
+  <footer class="playback-dock">
+    <!-- Scrubber Row -->
+    <div class="timeline-row">
+      <span class="time-label" id="current-time-label">00:00</span>
+      <div class="slider-container">
+        <input type="range" class="wood-slider" id="timeline-slider" min="0" max="100" value="0">
+      </div>
+      <span class="time-label" id="total-time-label">00:00</span>
+    </div>
+
+    <!-- Control Buttons & Pitch Actions -->
+    <div class="controls-row">
+      <div class="transport-group">
+        <!-- Play / Pause Button -->
+        <div class="wood-button-outer" id="btn-play-pause">
+          <div class="wood-button-body">
+            <span class="wood-grain-top"></span>
+            <span class="wood-grain-bottom"></span>
+            <span class="wood-button-text" id="play-pause-text">▶ Play Replay</span>
+          </div>
+        </div>
+
+        <!-- Reset Button -->
+        <div class="wood-button-outer wood-button-small" id="btn-reset" title="Rewind to start">
+          <div class="wood-button-body">
+            <span class="wood-grain-top"></span>
+            <span class="wood-grain-bottom"></span>
+            <span class="wood-button-text">⏮ Reset</span>
+          </div>
+        </div>
+
+        <!-- Next Anomaly Button -->
+        <div class="wood-button-outer wood-button-small" id="btn-next-anomaly"
+          title="Jump directly to next road anomaly">
+          <div class="wood-button-body">
+            <span class="wood-grain-top"></span>
+            <span class="wood-grain-bottom"></span>
+            <span class="wood-button-text">⏭ Next Anomaly</span>
+          </div>
+        </div>
+
+        <!-- Speed Selector -->
+        <div class="speed-group">
+          <button class="speed-btn" data-speed="0.5">0.5x</button>
+          <button class="speed-btn active" data-speed="1">1x</button>
+          <button class="speed-btn" data-speed="2">2x</button>
+          <button class="speed-btn" data-speed="5">5x</button>
+        </div>
+      </div>
+
+      <!-- Scenario and Vehicle Filters -->
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <select class="filter-select" id="scenario-filter"
+          title="Choose simulated scenario from simulated_car_observations">
+          <option value="staggered" selected>Scenario: Staggered (Simultaneous)</option>
+          <option value="cascade">Scenario: Cascade (20s Delays)</option>
+          <option value="warning">Scenario: 200 m Pothole Warning</option>
+          <option value="reroute">Scenario: Automatic Rerouting</option>
+        </select>
+
+        <select class="filter-select" id="vehicle-filter">
+          <option value="ALL">Show All 4 Cars</option>
+          <option value="01">Car 01</option>
+          <option value="02">Car 02</option>
+          <option value="03">Car 03</option>
+          <option value="04">Car 04</option>
+        </select>
+      </div>
+
+
+    </div>
+  </footer>
+
+  <!-- Slide-out Database Inspector Drawer (Town Ledger) -->
+  <div class="drawer-backdrop" id="drawer-backdrop"></div>
+  <aside class="db-drawer" id="db-drawer">
+    <div class="drawer-header">
+      <div class="drawer-title-group">
+        <h2>Municipal Road Ledger</h2>
+        <p>Direct view of cloud PostgreSQL database tables</p>
+      </div>
+      <button class="drawer-close" id="drawer-close-btn">&times;</button>
+    </div>
+
+    <div class="drawer-tabs">
+      <button class="drawer-tab active" id="tab-detections-btn">Simulated Detections</button>
+      <button class="drawer-tab" id="tab-potholes-btn">Active Potholes DB</button>
+    </div>
+
+    <div class="drawer-content">
+      <!-- Simulated Detections Table -->
+      <div id="tab-detections-content">
+        <table class="records-table">
+          <thead>
+            <tr>
+              <th>Vehicle</th>
+              <th>Road Quality</th>
+              <th>Sensors</th>
+              <th>Coordinates</th>
+            </tr>
+          </thead>
+          <tbody id="detections-table-body">
+            <tr>
+              <td colspan="4" style="text-align: center; color: var(--ink-muted);">Loading detections...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Potholes Database Table -->
+      <div id="tab-potholes-content" style="display: none;">
+        <table class="records-table">
+          <thead>
+            <tr>
+              <th>Severity</th>
+              <th>Confidence</th>
+              <th>Origin</th>
+              <th>Coordinates</th>
+            </tr>
+          </thead>
+          <tbody id="potholes-table-body">
+            <tr>
+              <td colspan="4" style="text-align: center; color: var(--ink-muted);">Loading potholes...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Leaflet JS: Try local vendor first, then fallback to CDN -->
+  <script src="/vendor/leaflet/leaflet.js"
+    onerror="this.onerror=null;this.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';"></script>
+  <script type="module" src="app.js"></script>
+</body>
+
+</html>

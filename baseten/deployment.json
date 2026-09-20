@@ -1,0 +1,11 @@
+{
+  "model_name": "roughroute-imu-original-ensemble",
+  "model_id": "qk54002q",
+  "deployment_id": "woovmmk",
+  "team": "Hack the North",
+  "predict_url": "https://model-qk54002q.api.baseten.co/deployment/woovmmk/predict",
+  "logs_url": "https://app.baseten.co/models/qk54002q/logs/woovmmk",
+  "runtime": "PyTorch 2.9.0 CPU FP32",
+  "instance": "2 vCPUs, 8 GiB RAM",
+  "source_main_commit": "77700d70b6ce26a548956d048b9b713481e4b013"
+}

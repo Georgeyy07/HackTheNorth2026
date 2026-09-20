@@ -1,0 +1,7 @@
+-r requirements.txt
+numpy==1.26.4
+httpx>=0.24,<0.28
+psycopg2-binary>=2.9,<3
+osmnx>=2.0,<3
+networkx>=3,<4
+pillow>=10,<13
