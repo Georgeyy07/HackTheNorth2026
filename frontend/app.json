@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Roadscope Mobile",
+    "slug": "roadscope-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#08120e"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#08120e"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

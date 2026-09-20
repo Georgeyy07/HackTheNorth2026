@@ -1,0 +1,45 @@
+# Local datasets, models, exports, and experiment output
+/data/
+/artifacts/
+/reports/
+/cache/
+/route_planner/demo_output/
+/road_training/data*/
+**/checkpoints/
+**/plots/
+**/test-results/
+*.pt
+*.pth
+*.onnx
+*.npz
+*.npy
+*.parquet
+*.h5
+*.hdf5
+*.zip
+*.tar.gz
+events.out.tfevents.*
+
+# Python / JavaScript environments and build products
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+node_modules/
+.browsers/
+playwright-report/
+*.log
+*.pid
+.DS_Store
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.ssh/
