@@ -117,6 +117,8 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
     app = FastAPI(docs_url=None, redoc_url=None)
     from road_viewer.fleet import install_fleet_routes
     fleet_enabled = install_fleet_routes(app, os.environ.get("ROAD_VIEWER_FLEET"), HERE)
+    from road_viewer.navigation import install_navigation_routes
+    install_navigation_routes(app, HERE)
     install_routes(app, inference_service)
     from vision_inference.service import VisionService, install_routes as install_vision_routes
     vision_service = vision_service or VisionService.from_env()
