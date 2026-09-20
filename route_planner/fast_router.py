@@ -156,38 +156,32 @@ def compute_fast_osrm_routes(
     recommended_idx = min(range(len(parsed_routes)), key=lambda i: parsed_routes[i]["score"])
     fastest_idx = min(range(len(parsed_routes)), key=lambda i: parsed_routes[i]["duration_s"])
 
+    # Every route is emitted at most once. Tracking which source routes have
+    # been used matters because the fastest route is very often also the
+    # best-scoring one, so "Recommended" and "Fastest" collapse to the same
+    # road and the remaining slots must not re-offer a route already listed.
     final_routes = []
-    # 1. Recommended is always first
-    rec_r = dict(parsed_routes[recommended_idx])
-    rec_r["label"] = "Recommended"
-    final_routes.append(rec_r)
+    used_indices = set()
 
-    # 2. Fastest
-    if fastest_idx != recommended_idx:
-        fast_r = dict(parsed_routes[fastest_idx])
-        fast_r["label"] = "Fastest"
-        final_routes.append(fast_r)
-    else:
-        for i, r in enumerate(parsed_routes):
-            if i != recommended_idx:
-                alt_r = dict(r)
-                alt_r["label"] = "Alternate"
-                final_routes.append(alt_r)
-                break
+    def take(idx: int, label: str) -> None:
+        if idx in used_indices:
+            return
+        used_indices.add(idx)
+        route = dict(parsed_routes[idx])
+        route["label"] = label
+        final_routes.append(route)
 
-    # 3. Third option if available
-    for i, r in enumerate(parsed_routes):
-        if i not in (recommended_idx, fastest_idx) and len(final_routes) < 3:
-            alt_r = dict(r)
-            alt_r["label"] = f"Alternate {len(final_routes) + 1}"
-            final_routes.append(alt_r)
+    take(recommended_idx, "Recommended")
+    take(fastest_idx, "Fastest")
 
-    # If only 1 route returned, provide duplicate with Fastest label so UI has options
-    if len(final_routes) == 1:
-        synth = dict(final_routes[0])
-        synth["label"] = "Fastest"
-        final_routes.append(synth)
+    for i in range(len(parsed_routes)):
+        if len(final_routes) >= 3:
+            break
+        take(i, f"Alternate {len(final_routes) + 1}")
 
+    # Only genuinely distinct roads are returned, so a trip with one sensible
+    # way to drive it lists one option rather than the same road repeated
+    # under a second label.
 
     print(f"End find fastest route at {(time.perf_counter() - start_t):.6f}s")
 
