@@ -83,23 +83,31 @@ export class MotionPipeline {
 
   add(kind, event, receivedMs = Date.now()) {
     if (!(kind in this.queues)) throw new Error('Unknown sensor.');
-    if (![event.timestamp, event.x, event.y, event.z, receivedMs].every(Number.isFinite)
-        || event.timestamp < 0) {
+    let ts = event.timestamp;
+    if (!Number.isFinite(ts) || ts < 0) {
+      ts = receivedMs / 1000;
+    } else if (ts > 1e11) {
+      ts = ts / 1e9;
+    } else if (ts > 1e8) {
+      ts = ts / 1e3;
+    }
+    const safeEvent = { ...event, timestamp: ts };
+    if (![ts, safeEvent.x, safeEvent.y, safeEvent.z, receivedMs].every(Number.isFinite)) {
       this.rejected++;
       return;
     }
     let queue = this.queues[kind];
     const previous = queue.at(-1);
-    if (previous && event.timestamp <= previous.time) {
+    if (previous && ts <= previous.time) {
       this.rejected++;
       return;
     }
-    if ((previous && event.timestamp-previous.time > MAX_GAP + EPS) || queue.length >= 128) {
+    if ((previous && ts-previous.time > MAX_GAP + EPS) || queue.length >= 128) {
       this.reset();
       queue = this.queues[kind];
     }
-    queue.push({ time: event.timestamp, values: kind === 'accel'
-      ? accelerationSI(event, this.platform) : [event.x, event.y, event.z] });
+    queue.push({ time: ts, values: kind === 'accel'
+      ? accelerationSI(safeEvent, this.platform) : [safeEvent.x, safeEvent.y, safeEvent.z] });
     const { accel, gyro } = this.queues;
     if (!accel.length || !gyro.length) return;
     if (this.next === null) {
@@ -128,6 +136,9 @@ export class MotionPipeline {
         gyro: matrixRotate(this.matrix, g), quaternion,
         earthAccel: earth, earthGyro: rotate(quaternion, g),
         verticalLinear: earth[2]-GRAVITY,
+        latitude: this.lastPosition ? this.lastPosition.latitude : null,
+        longitude: this.lastPosition ? this.lastPosition.longitude : null,
+        gpsTimestamp: this.lastPosition ? this.lastPosition.time : null,
         settling: this.next-this.start < 10,
         canCalibrate: this.next-this.start >= 3 && this.stillSince !== null && this.next-this.stillSince >= 2,
       };
