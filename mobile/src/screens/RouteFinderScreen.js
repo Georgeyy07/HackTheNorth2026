@@ -12,6 +12,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 
 import { getRoute, getPotholes } from '../api';
+import { buildQualitySegments } from '../routeQuality';
 import { TurnByTurnTracker } from '../navigation';
 import AddressInput from '../components/AddressInput';
 import { COLORS, WoodButton, MAP_STYLE_PARCHMENT } from '../theme';
@@ -279,16 +280,29 @@ export default function RouteFinderScreen() {
         {result &&
           result.routes.map((route, i) => {
             const isSelected = i === selectedIndex;
-            return (
+            if (!isSelected) {
+              return (
+                <Polyline
+                  key={`route-${route.label}-${i}`}
+                  coordinates={toLatLng(route.coords)}
+                  strokeColor="#bba282"
+                  strokeWidth={4}
+                  zIndex={5}
+                />
+              );
+            }
+            // Drawn per stretch rather than as one line, so the colour shows
+            // which parts of the route are rough instead of averaging the
+            // whole trip into a single verdict.
+            return buildQualitySegments(route.coords, route.potholes_encountered).map((segment, s) => (
               <Polyline
-                key={`route-${route.label}-${i}`}
-                coordinates={toLatLng(route.coords)}
-                strokeColor={isSelected ? COLORS.terracotta : '#bba282'}
-                strokeWidth={isSelected ? 6 : 4}
-                lineDashPattern={isSelected ? [8, 5] : undefined}
-                zIndex={isSelected ? 10 : 5}
+                key={`route-${route.label}-${i}-seg-${s}`}
+                coordinates={segment.coordinates}
+                strokeColor={segment.color}
+                strokeWidth={6}
+                zIndex={10}
               />
-            );
+            ));
           })}
 
         {/* Departure Marker A (Always rendered when coordinate exists) */}
