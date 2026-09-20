@@ -1,5 +1,6 @@
 """Read-only browser replay of the frozen test-drive export."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import gzip
 import json
@@ -232,11 +233,21 @@ def create_app(export=None, filters=None):
     ):
         t0 = time.monotonic()
         logger.info("compute_route: origin=%r destination=%r", origin, destination)
+        # Geocoding is network-bound and was the single largest cost in a
+        # search where the user typed addresses rather than picking
+        # autocomplete suggestions. The two lookups are independent, so
+        # running them concurrently costs one round trip instead of two.
         try:
-            if origin_lat is None or origin_lon is None:
-                origin_lat, origin_lon = geocode_address(origin)
-            if dest_lat is None or dest_lon is None:
-                dest_lat, dest_lon = geocode_address(destination)
+            need_origin = origin_lat is None or origin_lon is None
+            need_dest = dest_lat is None or dest_lon is None
+            if need_origin or need_dest:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    origin_future = pool.submit(geocode_address, origin) if need_origin else None
+                    dest_future = pool.submit(geocode_address, destination) if need_dest else None
+                    if origin_future is not None:
+                        origin_lat, origin_lon = origin_future.result()
+                    if dest_future is not None:
+                        dest_lat, dest_lon = dest_future.result()
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         logger.info(
