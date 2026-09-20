@@ -251,7 +251,19 @@ _GEOCODER_USER_AGENT = "HackTheNorth2026-RoughRoute/1.0 (hackathon project; cont
 
 
 def _format_photon_name(properties: dict) -> str:
-    parts = [properties.get(k) for k in ("name", "street", "city", "state", "country")]
+    name = properties.get("name")
+    street = properties.get("street")
+    housenumber = properties.get("housenumber")
+    # Photon returns the house number in its own field, so joining only the
+    # street renders "10 Ames Circle" as "Ames Circle" -- dropping the one
+    # part that separates it from every other house on that street.
+    if housenumber:
+        if street:
+            street = f"{housenumber} {street}"
+        elif name:
+            name = f"{housenumber} {name}"
+
+    parts = [name, street, properties.get("city"), properties.get("state"), properties.get("country")]
     # Drop consecutive duplicates (e.g. name == city for a city-level result).
     deduped: List[str] = []
     for part in parts:
@@ -277,7 +289,11 @@ def suggest_addresses(query: str, limit: int = 5) -> List[AddressSuggestion]:
     try:
         response = requests.get(
             "https://photon.komoot.io/api/",
-            params={"q": query, "limit": limit},
+            # Over-fetched because OSM commonly holds the same address more
+            # than once (an address point and a building outline, say), which
+            # would otherwise spend several of the few visible rows repeating
+            # one place.
+            params={"q": query, "limit": limit * 2},
             headers={"User-Agent": _GEOCODER_USER_AGENT},
             timeout=8,
         )
@@ -286,14 +302,21 @@ def suggest_addresses(query: str, limit: int = 5) -> List[AddressSuggestion]:
     except requests.RequestException:
         return []
 
-    return [
-        {
-            "display_name": _format_photon_name(f["properties"]),
-            "lon": f["geometry"]["coordinates"][0],
-            "lat": f["geometry"]["coordinates"][1],
-        }
-        for f in features
-    ]
+    suggestions: List[AddressSuggestion] = []
+    seen = set()
+    for feature in features:
+        display_name = _format_photon_name(feature["properties"])
+        if not display_name or display_name in seen:
+            continue
+        seen.add(display_name)
+        suggestions.append({
+            "display_name": display_name,
+            "lon": feature["geometry"]["coordinates"][0],
+            "lat": feature["geometry"]["coordinates"][1],
+        })
+        if len(suggestions) >= limit:
+            break
+    return suggestions
 
 
 def nearest_node(graph, lat: float, lon: float):
