@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.gzip import GZipMiddleware
@@ -20,6 +22,17 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("road_viewer")
+
+# One-time Sentry setup for the whole process. dsn=None (SENTRY_DSN unset,
+# e.g. local dev) makes the SDK a safe no-op instead of erroring, so this is
+# always safe to leave in. traces_sample_rate=1.0 sends every request as a
+# trace (Tracing product) — fine for a hackathon-scale demo, would want to
+# lower this for a real production volume.
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    integrations=[FastApiIntegration()],
+    traces_sample_rate=1.0,
+)
 
 # Ensure repository root is in sys.path when executed directly as a script
 ROOT = Path(__file__).resolve().parent.parent
