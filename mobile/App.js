@@ -12,6 +12,7 @@ import MotionScreen from './src/screens/MotionScreen';
 import { useTiltMonitor } from './src/motion/useTiltMonitor';
 import TiltWarningOverlay from './src/components/TiltWarningOverlay';
 import { NavigationProvider, useNavigationStatus } from './src/context/NavigationContext';
+import { ImuStreamProvider } from './src/context/ImuStreamContext';
 
 const Tab = createBottomTabNavigator();
 
@@ -40,7 +41,8 @@ function MainApp() {
   const activeWarning = Boolean(isNavigating && isWarningActive);
 
   return (
-    <View style={{ flex: 1 }}>
+    <ImuStreamProvider isNavigating={isNavigating} tiltAngle={tiltAngle} maxTiltAngle={threshold || 20}>
+      <View style={{ flex: 1 }}>
       <NavigationContainer>
         <StatusBar style={activeWarning ? "light" : "dark"} />
         <Tab.Navigator
@@ -81,6 +83,7 @@ function MainApp() {
         onToggleNavigating={() => setIsNavigating((prev) => !prev)}
       />
     </View>
+    </ImuStreamProvider>
   );
 }
 
