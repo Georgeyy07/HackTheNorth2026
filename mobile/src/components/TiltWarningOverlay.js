@@ -56,7 +56,7 @@ export default function TiltWarningOverlay({
 
               <Text style={styles.instructionText}>
                 {isNavigating
-                  ? 'Please straighten your phone in the mount to continue recording road motion accurately.'
+                  ? 'Please straighten your phone in the mount to continue recording road motion accurately. IMU WebSocket streaming is paused while tilted.'
                   : 'Phone is tilted > 20°. Vibration is paused while typing/browsing and activates during navigation.'}
               </Text>
             </View>
