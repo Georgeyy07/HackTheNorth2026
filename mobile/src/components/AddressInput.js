@@ -133,19 +133,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 10,
   },
+  // Deliberately in normal flow rather than absolutely positioned. Floating
+  // it over the controls below meant Android clipped it to the parent's
+  // bounds: the one-line "Searching roads..." state fit and was visible,
+  // but the taller list of results was cut off entirely, so suggestions
+  // could never be tapped. Letting it take real layout space pushes the
+  // controls down while open, which cannot be clipped or painted over.
   dropdown: {
-    position: 'absolute',
-    top: '100%',
-    left: 0,
-    right: 0,
     backgroundColor: COLORS.parchmentCard,
     borderColor: COLORS.parchmentBorderDark,
     borderWidth: 1.5,
     borderRadius: 5,
     marginTop: 2,
-    zIndex: 9999,
-    elevation: 9999,
-    maxHeight: 180,
   },
   suggestionItem: {
     paddingHorizontal: 12,

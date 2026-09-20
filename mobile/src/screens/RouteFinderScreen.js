@@ -749,22 +749,12 @@ const styles = StyleSheet.create({
     color: COLORS.inkSecondary,
     fontFamily: 'serif',
   },
-  // The autocomplete dropdown is absolutely positioned and overflows below
-  // these inputs, across the controls that follow. Siblings paint in
-  // declaration order, so without raising this row the "Pick on map" row,
-  // the slider and the Find Routes button all drew on top of the dropdown
-  // and swallowed its taps. A zIndex on the AddressInput alone can't fix
-  // that: it only orders it against its own siblings inside this row.
   inputsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    zIndex: 100,
-    elevation: 100,
   },
   inputsColumn: {
     flex: 1,
-    zIndex: 100,
-    elevation: 100,
   },
   swapBtn: {
     width: 36,
