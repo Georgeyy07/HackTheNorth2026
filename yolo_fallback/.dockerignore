@@ -1,0 +1,7 @@
+# Keep the fallback image build context to just what server.py needs:
+# Dockerfile, requirements.txt, server.py, best.pt weights.
+__pycache__/
+*.pyc
+.DS_Store
+.env
+*.md
