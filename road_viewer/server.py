@@ -96,7 +96,7 @@ def ensure_default_export(export_dir: Path):
     (export_dir / 'manifest.json').write_text(json.dumps(manifest))
 
 
-def create_app(export=None, filters=None):
+def create_app(export=None, filters=None, inference_service=None):
     export_given = export is not None or "ROAD_VIEWER_EXPORT" in os.environ
     export = Path(export or os.environ.get("ROAD_VIEWER_EXPORT", EXPORT)).resolve()
     filters = Path(filters or os.environ.get("ROAD_VIEWER_FILTERS", FILTERS)).resolve()
@@ -109,7 +109,10 @@ def create_app(export=None, filters=None):
     profile_file = filters / "viewer_profiles.json"
     profiles = read(profile_file)["profiles"] if profile_file.exists() else [dict(id="original", label="Original post-processing", config={})]
     profile_lookup = {p["id"]:p for p in profiles}
+    from imu_inference.service import InferenceService, install_routes
+    inference_service = inference_service or InferenceService.from_env()
     app = FastAPI(docs_url=None, redoc_url=None)
+    install_routes(app, inference_service)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -160,12 +163,16 @@ def create_app(export=None, filters=None):
                       sample_rate_hz=100, gps_max_age_s=3.)
         return json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
 
-    # Initialize Tiger Data database
-    try:
-        init_db()
-        seed_sample_potholes()
-    except Exception as e:
-        pass
+    # Bootstrap demo data only for the local legacy store. Cloud schema changes
+    # belong to their owning service; IMU inference uses additive tables above.
+    cloud_database = any(os.environ.get(k) for k in ("DATABASE_URL", "TIGER_DATA_URL", "POSTGRES_URL"))
+    cloud_database |= os.environ.get("IMU_DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    if not cloud_database:
+        try:
+            init_db()
+            seed_sample_potholes()
+        except Exception:
+            logger.warning("Local demo pothole store could not be initialized")
 
     @app.get("/api/catalog")
     def catalog():
@@ -355,6 +362,7 @@ def create_app(export=None, filters=None):
         client = websocket.client.host if websocket.client else "unknown"
         logger.info(f"IMU WebSocket connected from {client}")
         total_samples = 0
+        inference_session = None
         try:
             while True:
                 data = await websocket.receive_text()
@@ -364,15 +372,41 @@ def create_app(export=None, filters=None):
                     continue
 
                 if isinstance(payload, dict) and payload.get("type") == "handshake":
-                    logger.info(f"IMU client {client} ({payload.get('client', 'device')}) sent handshake: {payload}")
-                    # print(f"[IMU 100Hz] Client {client} ({payload.get('client', 'device')}) connected and ready to stream", flush=True)
-                    await websocket.send_json({"status": "ready", "server": "road_viewer"})
+                    if inference_service is not None:
+                        try:
+                            inference_session = await inference_service.start(payload)
+                            await websocket.send_json({"status": "ready", "server": "road_viewer",
+                                "session_id": inference_session.id, "inference": True})
+                        except ValueError as exc:
+                            await websocket.send_json({"status": "error", "message": str(exc)})
+                        except Exception:
+                            await websocket.send_json({"status": "error", "message": "Could not create inference session"})
+                    else:
+                        await websocket.send_json({"status": "ready", "server": "road_viewer", "inference": False})
                     continue
 
                 if isinstance(payload, dict) and (payload.get("type") == "camera_frame" or "frame_number" in payload):
                     frame_num = payload.get("frame_number", 0)
                     print(f"recieved camera frame {frame_num}", flush=True)
                     await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
+                    continue
+
+                if inference_service is not None:
+                    if inference_session is None:
+                        await websocket.send_json({"status": "error", "message": "Send a valid inference handshake first"})
+                        continue
+                    try:
+                        if not isinstance(payload, dict):
+                            raise ValueError("Expected a batch object")
+                        response = await inference_session.process(payload)
+                        total_samples = response["total_samples"]
+                        await websocket.send_json(response)
+                    except ValueError as exc:
+                        await websocket.send_json({"status": "error", "retryable": False, "message": str(exc)})
+                    except Exception:
+                        logger.warning("IMU inference or persistence failed; batch state was not advanced")
+                        await websocket.send_json({"status": "error", "retryable": True,
+                            "message": "Inference or persistence unavailable; retry the same batch"})
                     continue
 
                 if isinstance(payload, dict) and "samples" in payload:

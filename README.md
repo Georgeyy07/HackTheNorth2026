@@ -2,12 +2,16 @@
 
 PyTorch models for **road roughness (IRI)** and **localized disturbances**, plus a browser replay of timestamped predictions on a map. This repository contains the training/inference code and visualizer from the road-sensor research workspace.
 
-The current deployed model is a four-member, instance-normalized, bidirectional PatchTST ensemble. It consumes 100 Hz acceleration, gyroscope, and speed, and produces two outputs per 160 ms patch: IRI and disturbance probability. The rolling inference wrapper combines overlapping predictions and finalizes them after two subsequent patches (320 ms of observation delay, plus processing/input availability).
+The Baseten deployment on this branch uses the original four-model ordinal PatchTST ensemble: **100 Hz acceleration XYZ + speed → good/medium/bad road quality and disturbance scores**. FastAPI applies the saved car calibration, rolling consensus, Kalman filtering and hysteresis, then writes finalized predictions to Tiger PostgreSQL. Gyroscope supports the phone's VQF orientation preprocessing. [Deployment, setup and verified results](docs/imu-baseten.md).
+
+The existing research code below also supports numeric IRI models. Live ordinal inference is implemented in `imu_inference/`, with the original verified weights in `models/ordinal_pvs/`.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
+| `imu_inference/` | Original ordinal ensemble, cloud transport, calibration, rolling state and Tiger storage |
+| `baseten/` | Truss deployment bundle configuration and verification evidence |
 | `road_training/dataset.py` | Memory-mapped PyTorch dataset; real/synthetic/both filters and fixed splits |
 | `road_training/instance_model.py` | Current instance-normalized encoder and two prediction heads |
 | `road_training/train_multitask.py` | Shared patch targets, Huber/focal losses, evaluation, and baseline trainer |

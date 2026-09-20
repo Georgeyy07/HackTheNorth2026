@@ -4,7 +4,8 @@ import { Accelerometer, Gyroscope } from 'expo-sensors';
 import * as Location from 'expo-location';
 import { getWebSocketUrl } from '../api.js';
 import { MotionPipeline } from './pipeline.js';
-import { mountMatrix, accelerationSI, matrixRotate } from './vehicle.js';
+import { mountMatrix } from './vehicle.js';
+import { modelSample, inferenceHandshake } from './modelSample.js';
 import { BATCH_INTERVAL_MS, DEFAULT_MAX_TILT_DEGREES, shouldStreamImu } from './imuStreamConfig.js';
 
 export { BATCH_INTERVAL_MS, DEFAULT_MAX_TILT_DEGREES, shouldStreamImu };
@@ -31,14 +32,40 @@ export function useImuStreamer({
   const activeRef = useRef(false);
   const latestGpsRef = useRef(null);
   const batchSeqRef = useRef(0);
+  const pendingRef = useRef(null);
+  const readyRef = useRef(false);
+  const segmentRef = useRef(null);
+  const [latestPrediction, setLatestPrediction] = useState(null);
 
   const flushBuffer = useCallback(() => {
     const ws = socketRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!readyRef.current) return;
+    if (pendingRef.current) {
+      const pending = pendingRef.current;
+      if (Date.now() - pending.sentAt > 130000) {
+        if (pending.retries >= 3) {
+          ws.close(1011, 'Inference acknowledgement timeout');
+          return;
+        }
+        pending.retries++;
+        pending.sentAt = Date.now();
+        ws.send(JSON.stringify(pending.payload));
+      }
+      return;
+    }
     if (bufferRef.current.length === 0) return;
-
-    const samplesToSend = bufferRef.current;
-    bufferRef.current = [];
+    const segment = bufferRef.current[0].segment;
+    if (segmentRef.current !== null && segment !== segmentRef.current) {
+      readyRef.current = false;
+      segmentRef.current = segment;
+      ws.send(JSON.stringify(inferenceHandshake(Platform.OS)));
+      return;
+    }
+    segmentRef.current = segment;
+    const boundary = bufferRef.current.findIndex((sample) => sample.segment !== segment);
+    const count = Math.min(1024, boundary < 0 ? bufferRef.current.length : boundary);
+    const samplesToSend = bufferRef.current.splice(0, count);
     batchSeqRef.current += 1;
 
     const gps = latestGpsRef.current?.coords;
@@ -59,6 +86,7 @@ export function useImuStreamer({
     };
 
     try {
+      pendingRef.current = { payload, sentAt: Date.now(), retries: 0 };
       ws.send(JSON.stringify(payload));
       if (mountedRef.current) {
         setStats((prev) => ({
@@ -95,6 +123,10 @@ export function useImuStreamer({
     }
 
     bufferRef.current = [];
+    pendingRef.current = null;
+    readyRef.current = false;
+    segmentRef.current = null;
+    latestGpsRef.current = null;
     pipelineRef.current = null;
 
     if (mountedRef.current) {
@@ -140,7 +172,15 @@ export function useImuStreamer({
         platform: Platform.OS,
         matrix,
         onSample: (sample) => {
-          // If pipeline produces a sample, we can sync or observe it
+          const formatted = modelSample(sample, pipeline.matrix, latestGpsRef.current?.receivedAt);
+          if (bufferRef.current.length >= 15000) {
+            stop();
+            setError('Inference cannot keep up; reconnect to start a fresh session.');
+            setStatus('error');
+            return;
+          }
+          bufferRef.current.push(formatted);
+          if (mountedRef.current) setLatestSample(formatted);
         },
       });
       pipelineRef.current = pipeline;
@@ -151,7 +191,7 @@ export function useImuStreamer({
       socketRef.current = ws;
 
       ws.onopen = () => {
-        if (!activeRef.current) {
+        if (!activeRef.current || socketRef.current !== ws) {
           ws.close();
           return;
         }
@@ -159,16 +199,36 @@ export function useImuStreamer({
           setStatus('streaming');
         }
         try {
-          ws.send(JSON.stringify({
-            type: 'handshake',
-            client: Platform.OS,
-            timestamp: Date.now(),
-            rate_hz: 5,
-          }));
+          ws.send(JSON.stringify(inferenceHandshake(Platform.OS)));
         } catch (_) {}
       };
 
+      ws.onmessage = (event) => {
+        if (socketRef.current !== ws) return;
+        let message;
+        try { message = JSON.parse(event.data); } catch (_) { return; }
+        if (message.status === 'ready') {
+          readyRef.current = true;
+          flushBuffer();
+        } else if (message.status === 'ok' && message.batch_id === pendingRef.current?.payload.batch_id) {
+          pendingRef.current = null;
+          const latest = message.updates?.filter((u) => u.is_final).at(-1);
+          if (latest && mountedRef.current) setLatestPrediction(latest);
+          flushBuffer();
+        } else if (message.status === 'error') {
+          if (message.retryable && pendingRef.current) {
+            // Keep the exact batch until acknowledged; retry on the flush timer.
+            pendingRef.current.sentAt = Date.now() - 129000;
+          } else {
+            stop();
+            setError(message.message || 'Inference rejected the stream');
+            setStatus('error');
+          }
+        }
+      };
+
       ws.onerror = (e) => {
+        if (socketRef.current !== ws) return;
         const msg = e.message || 'WebSocket error connecting to backend';
         if (mountedRef.current) {
           setError(msg);
@@ -177,8 +237,9 @@ export function useImuStreamer({
       };
 
       ws.onclose = (e) => {
+        if (socketRef.current !== ws) return;
         if (activeRef.current && mountedRef.current) {
-          setStatus('idle');
+          stop();
           if (e.code !== 1000) {
             setError(`WebSocket closed: code ${e.code} (${e.reason || 'network issue'})`);
           }
@@ -189,52 +250,8 @@ export function useImuStreamer({
       Accelerometer.setUpdateInterval(10);
       Gyroscope.setUpdateInterval(10);
 
-      const latestGyro = { x: 0, y: 0, z: 0 };
-
-      const gyroSub = Gyroscope.addListener((event) => {
-        latestGyro.x = event.x;
-        latestGyro.y = event.y;
-        latestGyro.z = event.z;
-        pipeline.add('gyro', event);
-      });
-
-      const accSub = Accelerometer.addListener((event) => {
-        pipeline.add('accel', event);
-
-        // Robust direct 100Hz sample generation with normalized timestamp
-        const nowMs = Date.now();
-        let ts = event.timestamp;
-        if (!Number.isFinite(ts) || ts < 0) {
-          ts = nowMs / 1000;
-        } else if (ts > 1e11) {
-          ts = ts / 1e9;
-        } else if (ts > 1e8) {
-          ts = ts / 1e3;
-        }
-
-        const siAccel = accelerationSI(event, Platform.OS);
-        const vehicleAccel = matrixRotate(matrix, siAccel);
-        const vehicleGyro = matrixRotate(matrix, [latestGyro.x, latestGyro.y, latestGyro.z]);
-        const gps = latestGpsRef.current?.coords;
-
-        const formatted = {
-          time: ts,
-          accel_x: vehicleAccel[0],
-          accel_y: vehicleAccel[1],
-          accel_z: vehicleAccel[2],
-          gyro_x: vehicleGyro[0],
-          gyro_y: vehicleGyro[1],
-          gyro_z: vehicleGyro[2],
-          speed: gps && Number.isFinite(gps.speed) ? gps.speed : null,
-          latitude: gps && Number.isFinite(gps.latitude) ? gps.latitude : null,
-          longitude: gps && Number.isFinite(gps.longitude) ? gps.longitude : null,
-        };
-
-        bufferRef.current.push(formatted);
-        if (mountedRef.current) {
-          setLatestSample(formatted);
-        }
-      });
+      const gyroSub = Gyroscope.addListener((event) => pipeline.add('gyro', event));
+      const accSub = Accelerometer.addListener((event) => pipeline.add('accel', event));
 
       subscriptionsRef.current.push(accSub, gyroSub);
 
@@ -242,7 +259,7 @@ export function useImuStreamer({
       const locSub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 0 },
         (position) => {
-          latestGpsRef.current = position;
+          latestGpsRef.current = { ...position, receivedAt: Date.now() };
           pipeline.setLocation(position);
         },
       );
@@ -313,6 +330,7 @@ export function useImuStreamer({
     setWsUrl,
     stats,
     latestSample,
+    latestPrediction,
     start,
     stop,
     flushBuffer,

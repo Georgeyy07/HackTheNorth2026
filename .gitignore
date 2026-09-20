@@ -43,3 +43,13 @@ playwright-report/
 *.pem
 *.key
 .ssh/
+
+# Generated Baseten archive contents; canonical code and weight manifest are tracked.
+/baseten/imu_ensemble/data/
+/baseten/imu_ensemble/packages/
+
+# Portable, checksum-verified original deployment ensemble (about 12 MB total).
+!/models/ordinal_pvs/seed52.pt
+!/models/ordinal_pvs/seed53.pt
+!/models/ordinal_pvs/seed54.pt
+!/models/ordinal_pvs/seed55.pt
