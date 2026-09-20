@@ -29,7 +29,14 @@
       ],
       "expo-notifications",
       ["expo-sensors", { "motionPermission": "RoughRoute records accelerometer and gyroscope data to measure road motion." }],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "RoughRoute uses the camera to film a demonstration video alongside its motion recordings.",
+          "microphonePermission": "RoughRoute uses the microphone to add audio to the demonstration video."
+        }
+      ]
     ]
   }
 }

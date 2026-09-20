@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { MOUNTS, mountMatrix } from '../motion/vehicle';
 import { useMotionRecorder } from '../motion/useMotionRecorder';
+import { recordingTag, saveRecordingVideo } from '../motion/files';
 
 const value = (v) => Number.isFinite(v) ? v.toFixed(3) : '—';
 
@@ -16,13 +18,53 @@ export default function MotionScreen() {
   const recorder = useMotionRecorder();
   const [mount, setMount] = useState('upright');
   const [angles, setAngles] = useState(['0', '0', '0']);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [micPermission, requestMicPermission] = useMicrophonePermissions();
+  const cameraRef = useRef(null);
+  const filming = useRef(null); // { tag, pending: Promise<{uri}> } while a demo clip is recording
+  const cameraReady = useRef(null); // { resolve(ready) } for the pending CameraView mount
   const active = recorder.status !== 'idle';
   const sample = recorder.live?.sample;
+  const showCamera = active && cameraPermission?.granted;
 
-  const start = () => {
+  // CameraView finishes native init well after it mounts; recordAsync throws
+  // until onCameraReady fires, so wait for it (bounded) instead of guessing.
+  const waitForCameraReady = (timeoutMs = 4000) => new Promise((resolve) => {
+    let settled = false;
+    const finish = (ready) => { if (!settled) { settled = true; resolve(ready); } };
+    cameraReady.current = { resolve: () => finish(true) };
+    setTimeout(() => finish(false), timeoutMs);
+  });
+
+  // Runs on every stop path (button, app-backgrounded, screen-unmounted), not
+  // just the explicit Stop button, so a backgrounded clip is never orphaned
+  // in cache while its JSONL session still gets closed and saved normally.
+  useEffect(() => {
+    recorder.onStopRef.current = () => {
+      const clip = filming.current;
+      filming.current = null;
+      if (!clip) return;
+      cameraRef.current?.stopRecording();
+      clip.pending
+        .then(({ uri }) => saveRecordingVideo(clip.tag, uri))
+        .then(() => recorder.refresh())
+        .catch((err) => Alert.alert('Demo video', `Recording saved without its video: ${err.message}`));
+    };
+  }, [recorder]);
+
+  const start = async () => {
     try {
       if (angles.some((a) => !a.trim())) throw new Error('Enter all three correction angles.');
-      recorder.start(mountMatrix(mount, ...angles.map(Number)));
+      const camera = await requestCameraPermission();
+      const mic = await requestMicPermission();
+      const tag = recordingTag();
+      const readyPromise = camera.granted ? waitForCameraReady() : null;
+      const ok = await recorder.start(mountMatrix(mount, ...angles.map(Number)), tag);
+      // The demo clip is a bonus for showing the run later; never let it block
+      // or fail the IMU/GPS recording that the model actually depends on.
+      if (ok && readyPromise && await readyPromise && cameraRef.current) {
+        filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
+      }
     } catch (err) { Alert.alert('Mount settings', err.message); }
   };
 
@@ -31,6 +73,13 @@ export default function MotionScreen() {
       if (!await Sharing.isAvailableAsync()) throw new Error('File sharing is unavailable on this device.');
       await Sharing.shareAsync(file.uri, { mimeType: 'application/x-ndjson', UTI: 'public.plain-text', dialogTitle: 'Export raw + VQF recording' });
     } catch (err) { Alert.alert('Export recording', err.message); }
+  };
+
+  const shareVideo = async (video) => {
+    try {
+      if (!await Sharing.isAvailableAsync()) throw new Error('File sharing is unavailable on this device.');
+      await Sharing.shareAsync(video.uri, { mimeType: 'video/mp4', dialogTitle: 'Export demonstration video' });
+    } catch (err) { Alert.alert('Export video', err.message); }
   };
 
   return <SafeAreaView style={styles.container} edges={['top']}>
@@ -60,6 +109,12 @@ export default function MotionScreen() {
       <Text style={styles.description}>{recorder.status === 'starting' ? 'Starting sensors and GPS…' : active
         ? 'Recording to device storage · stops and saves if the app goes to the background.'
         : 'Sessions are saved locally. Export a session below to share all raw and stabilized samples.'}</Text>
+      {showCamera && <View style={styles.card}>
+        <Text style={styles.heading}>Demonstration video</Text>
+        <CameraView ref={cameraRef} style={styles.camera} facing="back" mode="video"
+          onCameraReady={() => cameraReady.current?.resolve()} />
+        <Text style={styles.description}>Filming alongside the recording, for a visual demo of the run · saved next to this session's export.</Text>
+      </View>}
       <View style={styles.card}>
         <Text style={styles.heading}>Vehicle model input</Text>
         <Text style={styles.description}>Acceleration includes gravity · m/s². X forward, Y left, Z up. Speed in m/s.</Text>
@@ -84,6 +139,9 @@ export default function MotionScreen() {
         <Text style={styles.text}>{file.name}</Text>
         <Text style={styles.description}>{(file.size/1024/1024).toFixed(2)} MB · JSONL · raw + stabilized</Text>
         <Button disabled={active} onPress={() => share(file)}>Export session</Button>
+        {file.video
+          ? <Button disabled={active} onPress={() => shareVideo(file.video)}>Export demo video ({(file.video.size/1024/1024).toFixed(1)} MB)</Button>
+          : <Text style={styles.description}>No demo video for this session.</Text>}
       </View>)}
     </ScrollView>
   </SafeAreaView>;
@@ -96,6 +154,7 @@ const styles = StyleSheet.create({
   heading: { color: '#e6f4fe', fontWeight: '700', fontSize: 17 },
   description: { color: '#9ca3af', fontSize: 13, lineHeight: 19 },
   card: { backgroundColor: '#111827', borderRadius: 12, padding: 16, gap: 12 },
+  camera: { width: '100%', aspectRatio: 16/9, borderRadius: 8, overflow: 'hidden', backgroundColor: '#000' },
   text: { color: '#e6f4fe', fontSize: 13 },
   row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   chip: { borderColor: '#374151', borderWidth: 1, borderRadius: 8, padding: 10 },

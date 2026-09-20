@@ -2,10 +2,15 @@ import { Directory, File, FileMode, Paths } from 'expo-file-system';
 
 const recordingsDirectory = () => new Directory(Paths.document, 'motion-recordings');
 
-export function createRecordingSink() {
+/** Shared basename for a session's JSONL and its paired demonstration video. */
+export function recordingTag() {
+  return `${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createRecordingSink(tag = recordingTag()) {
   const directory = recordingsDirectory();
   directory.create({ idempotent: true, intermediates: true });
-  const name = `imu-${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(36).slice(2, 8)}.jsonl`;
+  const name = `imu-${tag}.jsonl`;
   const file = new File(directory, name);
   file.create();
   const handle = file.open(FileMode.WriteOnly);
@@ -18,6 +23,7 @@ export function createRecordingSink() {
   };
   return {
     uri: file.uri,
+    tag,
     append(text) {
       if (closed) throw new Error('Recording file is closed.');
       pending += text;
@@ -31,10 +37,28 @@ export function createRecordingSink() {
   };
 }
 
+/** Moves the camera's recorded clip (in cache) alongside its session's JSONL. */
+export function saveRecordingVideo(tag, sourceUri) {
+  const directory = recordingsDirectory();
+  directory.create({ idempotent: true, intermediates: true });
+  const source = new File(sourceUri);
+  const dest = new File(directory, `imu-${tag}.mp4`);
+  source.moveSync(dest);
+  return { name: dest.name, uri: dest.uri, size: dest.size };
+}
+
 export function listRecordings() {
   const directory = recordingsDirectory();
   if (!directory.exists) return [];
-  return directory.list().filter((file) => file instanceof File && file.name.endsWith('.jsonl'))
+  const files = directory.list();
+  return files.filter((file) => file instanceof File && file.name.endsWith('.jsonl'))
     .sort((a, b) => b.name.localeCompare(a.name))
-    .map((file) => ({ name: file.name, uri: file.uri, size: file.size }));
+    .map((file) => {
+      const tag = file.name.slice('imu-'.length, -'.jsonl'.length);
+      const video = files.find((f) => f instanceof File && f.name === `imu-${tag}.mp4`);
+      return {
+        name: file.name, uri: file.uri, size: file.size,
+        video: video ? { name: video.name, uri: video.uri, size: video.size } : null,
+      };
+    });
 }

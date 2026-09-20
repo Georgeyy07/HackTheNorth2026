@@ -1,9 +1,18 @@
 import { BasicVQF, conjugate, inclinationQuaternion, norm, rotate } from './vqf.js';
 import { accelerationSI, CHANNELS, GRAVITY, matrixRotate, mountMatrix, rotateMatrix } from './vehicle.js';
+import { haversineDistanceM } from '../navigation.js';
 
 const PERIOD = 0.01;
 const MAX_GAP = 0.05;
-const SPEED_MAX_AGE_MS = 3000;
+// GPS fixes routinely arrive every 2-5s in real conditions (not the
+// requested 1s interval -- that's a request, not a guarantee), so a 3s
+// staleness window discarded the majority of samples between fixes even
+// with good signal. Road speed doesn't change fast enough for a
+// slightly-older fix to be meaningfully wrong.
+const SPEED_MAX_AGE_MS = 6000;
+// Below this, GPS position jitter (a few meters of fix noise) dominates the
+// distance/time derivation and produces spurious speed spikes.
+const MIN_DERIVE_DT_S = 0.5;
 const EPS = 1e-8;
 
 function at(queue, time) {
@@ -26,6 +35,7 @@ export class MotionPipeline {
     this.segment = -1;
     this.rejected = 0;
     this.speedFix = null;
+    this.lastPosition = null;
     this.reset();
   }
 
@@ -41,11 +51,29 @@ export class MotionPipeline {
   }
 
   setLocation(position, now = Date.now()) {
-    const speed = position.coords.speed;
+    const { speed, latitude, longitude } = position.coords;
     const time = position.timestamp;
+    const fresh = Number.isFinite(time) && time <= now + 1000 && now-time <= SPEED_MAX_AGE_MS;
+    let resolved = Number.isFinite(speed) && speed >= 0 ? speed : null;
+    let derived = false;
+    // The device speed field is frequently unavailable (many chipsets only report
+    // it above some threshold, or not at all); fall back to distance/time between
+    // consecutive fixes rather than losing the channel entirely.
+    if (resolved === null && fresh && this.lastPosition
+        && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      const dtS = (time-this.lastPosition.time)/1000;
+      if (dtS >= MIN_DERIVE_DT_S && dtS*1000 <= SPEED_MAX_AGE_MS) {
+        const distanceM = haversineDistanceM(
+          this.lastPosition.latitude, this.lastPosition.longitude, latitude, longitude);
+        resolved = distanceM/dtS;
+        derived = true;
+      }
+    }
+    if (Number.isFinite(latitude) && Number.isFinite(longitude) && Number.isFinite(time)) {
+      this.lastPosition = { latitude, longitude, time };
+    }
     // Invalid speed clears the previous hold; never turn missing GPS into 0.
-    this.speedFix = Number.isFinite(speed) && speed >= 0 && Number.isFinite(time)
-      && time <= now + 1000 && now-time <= SPEED_MAX_AGE_MS ? { speed, time } : null;
+    this.speedFix = resolved !== null && fresh ? { speed: resolved, time, derived } : null;
   }
 
   speedAt(now) {
@@ -96,6 +124,7 @@ export class MotionPipeline {
         time: this.next, availableAt: receivedMs, segment: this.segment,
         input: [...vehicle, speed], mask: [true, true, true, speed !== null],
         speedMps: speed, speedTimestamp: speed === null ? null : this.speedFix.time,
+        speedDerived: speed === null ? null : this.speedFix.derived,
         gyro: matrixRotate(this.matrix, g), quaternion,
         earthAccel: earth, earthGyro: rotate(quaternion, g),
         verticalLinear: earth[2]-GRAVITY,
@@ -130,7 +159,7 @@ export class MotionPipeline {
       units: ['m/s²', 'm/s²', 'm/s²', 'm/s'], accelerationIncludesGravity: true,
       axes: ['forward', 'left', 'up'], sampleRateHz: 100,
       deviceToVehicle: this.matrix, orientationFilter: 'BasicVQF 2.1.2 / 6D',
-      speedAlignment: 'latest fresh GPS fix at sample availability (maximum age 3 s)',
+      speedAlignment: 'latest fresh GPS fix at sample availability (maximum age 6 s)',
       samples: [...this.samples],
     };
   }
