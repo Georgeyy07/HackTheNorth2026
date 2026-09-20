@@ -21,7 +21,7 @@ import {
   CrosshairIcon,
   SwapIcon,
   HazardPin,
-  CompassRose,
+  CloseIcon,
 } from '../components/Icons';
 import { ParchmentMap, Marker, Polyline } from '../components/ParchmentMap';
 import { useNavigationStatus } from '../context/NavigationContext';
@@ -391,6 +391,7 @@ export default function RouteFinderScreen() {
                           setOriginCoords(null);
                         }
                       }}
+                      style={{ zIndex: 20, elevation: 20 }}
                     />
                     <AddressInput
                       placeholder="Destination address..."
@@ -406,6 +407,7 @@ export default function RouteFinderScreen() {
                           setDestCoords(null);
                         }
                       }}
+                      style={{ zIndex: 10, elevation: 10 }}
                     />
                   </View>
                   <TouchableOpacity style={styles.swapBtn} onPress={handleSwapAddresses}>
