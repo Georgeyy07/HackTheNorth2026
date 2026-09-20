@@ -120,16 +120,16 @@ export default function MotionScreen() {
             streamer.isStreaming
               ? styles.statusStreaming
               : streamer.pauseReason === 'tilt_exceeded'
-              ? styles.statusAlert
-              : styles.statusIdle
+                ? styles.statusAlert
+                : styles.statusIdle
           ]}>
             <View style={[
               styles.statusDot,
               streamer.isStreaming
                 ? styles.dotStreaming
                 : streamer.pauseReason === 'tilt_exceeded'
-                ? styles.dotAlert
-                : styles.dotIdle
+                  ? styles.dotAlert
+                  : styles.dotIdle
             ]} />
             <Text style={[
               styles.statusText,
@@ -139,10 +139,10 @@ export default function MotionScreen() {
               {streamer.isStreaming
                 ? 'Streaming (5x/sec)'
                 : streamer.pauseReason === 'tilt_exceeded'
-                ? 'Paused (Tilt > 20°)'
-                : streamer.isNavigating
-                ? 'Connecting…'
-                : 'Stopped (Not Navigating)'}
+                  ? 'Paused (Tilt > 20°)'
+                  : streamer.isNavigating
+                    ? 'Connecting…'
+                    : 'Stopped (Not Navigating)'}
             </Text>
           </View>
         </View>
@@ -156,7 +156,7 @@ export default function MotionScreen() {
             Navigation: <Text style={{ color: streamer.isNavigating ? '#34d399' : '#9ca3af', fontWeight: '700' }}>{streamer.isNavigating ? 'Active' : 'Inactive'}</Text>
           </Text>
           <Text style={styles.conditionText}>
-            Tilt: <Text style={{ color: streamer.tiltAngle > 20 ? '#ef4444' : '#34d399', fontWeight: '700' }}>{streamer.tiltAngle ? streamer.tiltAngle.toFixed(1) : '0.0'}°</Text> (Max: 20°)
+            {/* Tilt: <Text style={{ color: streamer.tiltAngle > 20 ? '#ef4444' : '#34d399', fontWeight: '700' }}>{streamer.tiltAngle ? streamer.tiltAngle.toFixed(1) : '0.0'}°</Text> (Max: 20°) */}
           </Text>
         </View>
 
@@ -256,10 +256,10 @@ export default function MotionScreen() {
       {!recorder.recordings.length && <Text style={styles.description}>No recordings yet.</Text>}
       {recorder.recordings.map((file) => <View style={styles.card} key={file.uri}>
         <Text style={styles.text}>{file.name}</Text>
-        <Text style={styles.description}>{(file.size/1024/1024).toFixed(2)} MB · JSONL · raw + stabilized</Text>
+        <Text style={styles.description}>{(file.size / 1024 / 1024).toFixed(2)} MB · JSONL · raw + stabilized</Text>
         <Button disabled={active} onPress={() => share(file)}>Export session</Button>
         {file.video
-          ? <Button disabled={active} onPress={() => shareVideo(file.video)}>Export demo video ({(file.video.size/1024/1024).toFixed(1)} MB)</Button>
+          ? <Button disabled={active} onPress={() => shareVideo(file.video)}>Export demo video ({(file.video.size / 1024 / 1024).toFixed(1)} MB)</Button>
           : <Text style={styles.description}>No demo video for this session.</Text>}
       </View>)}
     </ScrollView>
@@ -273,7 +273,7 @@ const styles = StyleSheet.create({
   heading: { color: '#e6f4fe', fontWeight: '700', fontSize: 17 },
   description: { color: '#9ca3af', fontSize: 13, lineHeight: 19 },
   card: { backgroundColor: '#111827', borderRadius: 12, padding: 16, gap: 12 },
-  camera: { width: '100%', aspectRatio: 16/9, borderRadius: 8, overflow: 'hidden', backgroundColor: '#000' },
+  camera: { width: '100%', aspectRatio: 16 / 9, borderRadius: 8, overflow: 'hidden', backgroundColor: '#000' },
   text: { color: '#e6f4fe', fontSize: 13 },
   row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   chip: { borderColor: '#374151', borderWidth: 1, borderRadius: 8, padding: 10 },

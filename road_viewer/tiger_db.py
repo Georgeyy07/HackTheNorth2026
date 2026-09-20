@@ -100,6 +100,24 @@ def init_db():
             logger.info(f"Hypertable notice: {e}")
             conn.rollback()
 
+        # Create simulated_detections table (timestamp int, imu bool, yolo bool, latitude, longitude, car_id)
+        create_simulated_detections_sql = """
+        CREATE TABLE IF NOT EXISTS simulated_detections (
+            id SERIAL,
+            timestamp BIGINT NOT NULL,
+            imu BOOLEAN NOT NULL DEFAULT FALSE,
+            yolo BOOLEAN NOT NULL DEFAULT FALSE,
+            latitude DOUBLE PRECISION NOT NULL,
+            longitude DOUBLE PRECISION NOT NULL,
+            car_id VARCHAR(100) NOT NULL,
+            PRIMARY KEY (id, timestamp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulated_detections_car_time ON simulated_detections (car_id, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_simulated_detections_coords ON simulated_detections (latitude, longitude);
+        """
+        cursor.execute(create_simulated_detections_sql)
+        conn.commit()
+
     else:
         # SQLite fallback schema
         try:
@@ -121,6 +139,23 @@ def init_db():
         );
         """
         cursor.execute(create_sql)
+        conn.commit()
+
+        # SQLite simulated_detections table
+        create_simulated_detections_sqlite = """
+        CREATE TABLE IF NOT EXISTS simulated_detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            imu INTEGER NOT NULL DEFAULT 0,
+            yolo INTEGER NOT NULL DEFAULT 0,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            car_id TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulated_detections_car_time ON simulated_detections (car_id, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_simulated_detections_coords ON simulated_detections (latitude, longitude);
+        """
+        cursor.execute(create_simulated_detections_sqlite)
         conn.commit()
 
     cursor.close()
@@ -287,7 +322,159 @@ def seed_sample_potholes():
     logger.info("Successfully seeded potholes into Tiger Data database!")
 
 
+def add_simulated_detection(
+    timestamp: int,
+    imu: bool,
+    yolo: bool,
+    latitude: float,
+    longitude: float,
+    car_id: str,
+) -> Dict[str, Any]:
+    """Insert a new detection record into simulated_detections table in Tiger Data database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    ts_val = int(timestamp)
+    imu_val = bool(imu)
+    yolo_val = bool(yolo)
+    lat_val = float(latitude)
+    lon_val = float(longitude)
+    car_val = str(car_id).strip()
+
+    if USE_POSTGRES:
+        sql = """
+        INSERT INTO simulated_detections (timestamp, imu, yolo, latitude, longitude, car_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id;
+        """
+        cursor.execute(sql, (ts_val, imu_val, yolo_val, lat_val, lon_val, car_val))
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+    else:
+        sql = """
+        INSERT INTO simulated_detections (timestamp, imu, yolo, latitude, longitude, car_id)
+        VALUES (?, ?, ?, ?, ?, ?);
+        """
+        cursor.execute(sql, (ts_val, int(imu_val), int(yolo_val), lat_val, lon_val, car_val))
+        new_id = cursor.lastrowid
+        conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    return {
+        "id": new_id,
+        "timestamp": ts_val,
+        "imu": imu_val,
+        "yolo": yolo_val,
+        "latitude": lat_val,
+        "longitude": lon_val,
+        "car_id": car_val,
+    }
+
+
+def get_simulated_detections(
+    car_id: Optional[str] = None,
+    imu: Optional[bool] = None,
+    yolo: Optional[bool] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Retrieve detections from simulated_detections table with optional filters."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT id, timestamp, imu, yolo, latitude, longitude, car_id FROM simulated_detections WHERE 1=1"
+    params = []
+    placeholder = "%s" if USE_POSTGRES else "?"
+
+    if car_id is not None:
+        query += f" AND car_id = {placeholder}"
+        params.append(str(car_id))
+    if imu is not None:
+        query += f" AND imu = {placeholder}"
+        params.append(bool(imu) if USE_POSTGRES else int(bool(imu)))
+    if yolo is not None:
+        query += f" AND yolo = {placeholder}"
+        params.append(bool(yolo) if USE_POSTGRES else int(bool(yolo)))
+
+    query += f" ORDER BY timestamp DESC LIMIT {int(limit)}"
+
+    cursor.execute(query, tuple(params))
+
+    if USE_POSTGRES:
+        colnames = [desc[0] for desc in cursor.description]
+        rows = [dict(zip(colnames, row)) for row in cursor.fetchall()]
+    else:
+        rows = [dict(row) for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    for row in rows:
+        row["imu"] = bool(row.get("imu"))
+        row["yolo"] = bool(row.get("yolo"))
+
+    return rows
+
+
+def get_simulated_detection_by_id(detection_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve a single detection from simulated_detections table by its ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    placeholder = "%s" if USE_POSTGRES else "?"
+    query = f"SELECT id, timestamp, imu, yolo, latitude, longitude, car_id FROM simulated_detections WHERE id = {placeholder}"
+
+    cursor.execute(query, (int(detection_id),))
+
+    if USE_POSTGRES:
+        row = cursor.fetchone()
+        if not row:
+            cursor.close()
+            conn.close()
+            return None
+        colnames = [desc[0] for desc in cursor.description]
+        record = dict(zip(colnames, row))
+    else:
+        row = cursor.fetchone()
+        if not row:
+            cursor.close()
+            conn.close()
+            return None
+        record = dict(row)
+
+    cursor.close()
+    conn.close()
+
+    record["imu"] = bool(record.get("imu"))
+    record["yolo"] = bool(record.get("yolo"))
+    return record
+
+
+def delete_simulated_detection(detection_id: int) -> bool:
+    """Delete a record from simulated_detections table by ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    placeholder = "%s" if USE_POSTGRES else "?"
+    sql = f"DELETE FROM simulated_detections WHERE id = {placeholder}"
+    cursor.execute(sql, (int(detection_id),))
+    conn.commit()
+    affected = cursor.rowcount > 0
+    cursor.close()
+    conn.close()
+    return affected
+
+
+# Aliases for backward-compatibility
+add_detection = add_simulated_detection
+get_detections = get_simulated_detections
+get_detection_by_id = get_simulated_detection_by_id
+delete_detection = delete_simulated_detection
+
+
 if __name__ == "__main__":
     init_db()
     seed_sample_potholes()
     print("Potholes in Tiger Data Database:", get_potholes())
+    print("Simulated Detections in Tiger Data Database:", get_simulated_detections())

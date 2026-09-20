@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
@@ -26,7 +27,11 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
+from road_viewer.tiger_db import (
+    init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole,
+    add_simulated_detection, get_simulated_detections, get_simulated_detection_by_id, delete_simulated_detection,
+    add_detection, get_detections, get_detection_by_id, delete_detection
+)
 from alert_service.potholes import fetch_active_potholes, severity_label, invalidate_potholes_cache
 from route_planner.cost import RoutingConfig
 from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node, suggest_addresses
@@ -215,6 +220,62 @@ def create_app(export=None, filters=None):
         seed_sample_potholes()
         invalidate_potholes_cache()
         return {"status": "ok", "potholes": get_potholes()}
+
+    @app.get("/api/simulated-detections")
+    @app.get("/api/simulated_detections")
+    @app.get("/api/detections")
+    def list_simulated_detections(
+        car_id: Optional[str] = None,
+        imu: Optional[bool] = None,
+        yolo: Optional[bool] = None,
+        limit: int = 100,
+    ):
+        return get_simulated_detections(car_id=car_id, imu=imu, yolo=yolo, limit=limit)
+
+    @app.get("/api/simulated-detections/{detection_id}")
+    @app.get("/api/simulated_detections/{detection_id}")
+    @app.get("/api/detections/{detection_id}")
+    def fetch_simulated_detection(detection_id: int):
+        record = get_simulated_detection_by_id(detection_id)
+        if not record:
+            raise HTTPException(404, "Simulated detection not found")
+        return record
+
+    @app.post("/api/simulated-detections")
+    @app.post("/api/simulated_detections")
+    @app.post("/api/detections")
+    def create_simulated_detection(payload: dict = Body(...)):
+        lat = payload.get("latitude") if payload.get("latitude") is not None else payload.get("lattitude")
+        lon = payload.get("longitude")
+        car_id = payload.get("car_id")
+        if lat is None or lon is None or car_id is None:
+            raise HTTPException(400, "latitude, longitude, and car_id are required")
+
+        ts = payload.get("timestamp")
+        if ts is None:
+            ts = int(time.time() * 1000)
+
+        imu_val = bool(payload.get("imu", False))
+        yolo_val = bool(payload.get("yolo", False))
+
+        new_record = add_simulated_detection(
+            timestamp=int(ts),
+            imu=imu_val,
+            yolo=yolo_val,
+            latitude=float(lat),
+            longitude=float(lon),
+            car_id=str(car_id),
+        )
+        return new_record
+
+    @app.delete("/api/simulated-detections/{detection_id}")
+    @app.delete("/api/simulated_detections/{detection_id}")
+    @app.delete("/api/detections/{detection_id}")
+    def remove_simulated_detection(detection_id: int):
+        success = delete_simulated_detection(detection_id)
+        if not success:
+            raise HTTPException(404, "Simulated detection not found")
+        return {"status": "ok", "deleted_id": detection_id}
 
     @app.get("/api/geocode/suggest")
     def geocode_suggest(q: str, limit: int = 5):
