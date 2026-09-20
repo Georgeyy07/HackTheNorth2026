@@ -286,37 +286,46 @@ def suggest_addresses(query: str, limit: int = 5) -> List[AddressSuggestion]:
     query = query.strip()
     if len(query) < 3:
         return []
+    return [
+        {"display_name": name, "lon": lon, "lat": lat}
+        for name, lon, lat in _photon_suggestions(query, limit)
+    ]
+
+
+# Typing an address issues a request per keystroke, and users routinely
+# backspace over and retype the same prefixes, so repeats are common and
+# each one otherwise costs another second of "Searching roads...".
+# Addresses don't move, so these stay valid for the life of the process.
+@lru_cache(maxsize=512)
+def _photon_suggestions(query: str, limit: int) -> tuple:
     try:
         response = requests.get(
             "https://photon.komoot.io/api/",
-            # Over-fetched because OSM commonly holds the same address more
-            # than once (an address point and a building outline, say), which
-            # would otherwise spend several of the few visible rows repeating
-            # one place.
-            params={"q": query, "limit": limit * 2},
+            # Deliberately not over-fetched to leave room for the dedupe
+            # below: Photon answers a limit of 5 in about 0.95s but anything
+            # larger in about 1.3s, and that 350ms lands on every keystroke.
+            # Losing a row to a duplicate now and then is the cheaper trade.
+            params={"q": query, "limit": limit},
             headers={"User-Agent": _GEOCODER_USER_AGENT},
             timeout=8,
         )
         response.raise_for_status()
         features = response.json().get("features", [])
     except requests.RequestException:
-        return []
+        return ()
 
-    suggestions: List[AddressSuggestion] = []
+    suggestions = []
     seen = set()
     for feature in features:
         display_name = _format_photon_name(feature["properties"])
+        # OSM often holds one address twice (an address point and a building
+        # outline), which would otherwise repeat a place across the few rows.
         if not display_name or display_name in seen:
             continue
         seen.add(display_name)
-        suggestions.append({
-            "display_name": display_name,
-            "lon": feature["geometry"]["coordinates"][0],
-            "lat": feature["geometry"]["coordinates"][1],
-        })
-        if len(suggestions) >= limit:
-            break
-    return suggestions
+        coordinates = feature["geometry"]["coordinates"]
+        suggestions.append((display_name, coordinates[0], coordinates[1]))
+    return tuple(suggestions)
 
 
 def nearest_node(graph, lat: float, lon: float):

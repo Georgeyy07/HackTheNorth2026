@@ -4,7 +4,11 @@ import { View, TextInput, TouchableOpacity, Text, StyleSheet, ActivityIndicator 
 import { suggestAddresses } from '../api';
 import { COLORS } from '../theme';
 
-const DEBOUNCE_MS = 400;
+// The lookup itself costs about a second, and this delay is added on top of
+// it before the request even starts -- while "Searching roads..." is already
+// showing. Long enough to still collapse a burst of keystrokes into one
+// request, short enough not to dominate the wait.
+const DEBOUNCE_MS = 200;
 const MIN_QUERY_LENGTH = 3;
 
 export default function AddressInput({
