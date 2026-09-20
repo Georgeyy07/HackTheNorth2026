@@ -84,7 +84,7 @@ export default function AddressInput({
           {suggestions.length === 0 ? (
             <Text style={styles.emptyText}>{loading ? 'Searching roads...' : 'No addresses found'}</Text>
           ) : (
-            suggestions.map((item, i) => (
+            suggestions.slice(5).map((item, i) => (
               <TouchableOpacity
                 key={`${item.lat},${item.lon},${i}`}
                 style={[
@@ -143,7 +143,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: 5,
     marginTop: 2,
-    zIndex: 50,
+    zIndex: 9999,
+    elevation: 9999,
     maxHeight: 180,
   },
   suggestionItem: {
