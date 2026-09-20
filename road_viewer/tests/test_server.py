@@ -1,6 +1,7 @@
 """Replay API tests use tiny fixtures; real exports are tested in browser.mjs."""
 import gzip
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,33 @@ def replay(tmp_path):
     manifest = dict(sessions=sessions, samples=300, duration_s=3.)
     (export / 'manifest.json').write_text(json.dumps(manifest))
     return TestClient(create_app(export, tmp_path / 'no_profiles')), export, manifest
+
+
+def test_inspector_stream_uses_small_preview_and_uncompressed_ranges(replay):
+    client, export, _ = replay
+    folder = export / 'kaggle_fixture'
+    original = folder / 'annotated.mp4'
+    preview = folder / 'annotated.preview.mp4'
+    original.write_bytes(b'original-video' * 1000)
+    preview.write_bytes(b'preview-video' * 200)
+    url = '/demo_view/videos/kaggle_fixture.mp4'
+    response = client.get(url, headers={'Range': 'bytes=0-2047', 'Accept-Encoding': 'gzip'})
+    assert response.status_code == 206
+    assert response.content == preview.read_bytes()[:2048]
+    assert response.headers['content-length'] == '2048'
+    assert response.headers['content-range'] == f'bytes 0-2047/{preview.stat().st_size}'
+    assert 'content-encoding' not in response.headers
+    assert 'no-transform' in response.headers['cache-control']
+    assert client.head(url).headers['content-length'] == str(preview.stat().st_size)
+    for path in [url + '?download=true', '/api/session/kaggle_fixture/annotated.mp4']:
+        full = client.get(path, headers={'Accept-Encoding': 'gzip'})
+        assert full.content == original.read_bytes()
+        assert 'content-encoding' not in full.headers
+    # Re-rendered recordings must never use a stale preview.
+    os.utime(preview, ns=(1, 1))
+    assert client.get(url).content == original.read_bytes()
+    preview.unlink()
+    assert client.get(url).content == original.read_bytes()
 
 
 def test_catalog_is_complete_and_routes_cannot_expose_arbitrary_files(replay):

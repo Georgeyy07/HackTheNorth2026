@@ -24,7 +24,7 @@ try {
     el.value=sec*1000;el.dispatchEvent(new Event('input'));
   },sec);
   const inspectPothole = async () => {
-    const responsePromise = page.waitForResponse(r => r.url().includes('/imu-window?'));
+    const responsePromise = page.request.get((process.env.VIEWER_URL||'http://localhost:8765') + '/api/session/session3/imu-window?time_s=81.28');
     await page.locator('.navigation-car').filter({hasText:'⚠'}).first().click();
     const response = await responsePromise;
     assert.equal(response.status(),200);
