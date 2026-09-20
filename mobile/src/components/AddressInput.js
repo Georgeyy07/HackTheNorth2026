@@ -84,7 +84,7 @@ export default function AddressInput({
           {suggestions.length === 0 ? (
             <Text style={styles.emptyText}>{loading ? 'Searching roads...' : 'No addresses found'}</Text>
           ) : (
-            suggestions.slice(5).map((item, i) => (
+            suggestions.slice(0, 5).map((item, i) => (
               <TouchableOpacity
                 key={`${item.lat},${item.lon},${i}`}
                 style={[
