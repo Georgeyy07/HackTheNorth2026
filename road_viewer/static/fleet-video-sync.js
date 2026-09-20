@@ -1,26 +1,100 @@
-/** Resolve a car's camera using the shared map timestamp (Unix milliseconds).
- * A gap means pause/hide footage, never advance the map clock to skip it.
+/**
+ * Fleet Video Synchronization Helper
+ * Implements the developer handoff specification for sessions 2–5.
  */
-export function resolveFleetVideo(manifest, variant, carID, mapTimestampMs) {
-  const car = manifest.variants[variant]?.cars.find(c => c.carID === carID);
-  if (!car || !Number.isFinite(mapTimestampMs)) throw new Error('Invalid car or map timestamp');
-  const elapsed = (mapTimestampMs - Date.parse(car.launch_timestamp)) / 1000;
-  if (elapsed < 0) return {state: 'waiting'};
-  if (elapsed > car.duration_s) return {state: 'finished'};
-  const sourceUs = car.source_start.source_us + Math.round(elapsed * 1e6);
-  const session = manifest.sessions.find(s => sourceUs >= s.origin_unix_us &&
-    sourceUs < s.origin_unix_us + Math.round(s.duration_s * 1e6));
-  if (!session) return {state: 'gap', reason: 'recording-gap'};
-  const rawTime = (sourceUs - session.origin_unix_us) / 1e6 - session.video_offset_s;
-  if (rawTime < 0 || rawTime >= session.video_duration_s)
-    return {state: 'gap', reason: 'video-unavailable', session: session.session};
-  // Map original variable frame PTS to the rendered constant frame rate video.
-  const pts = session.frame_pts_s;
-  let lo = 0, hi = pts.length;
-  while (lo < hi) { const mid = (lo + hi) >>> 1; if (pts[mid] <= rawTime) lo = mid + 1; else hi = mid; }
-  const index = Math.max(0, lo - 1);
-  const next = pts[index + 1] ?? session.video_duration_s;
-  const phase = Math.min(0.999999, Math.max(0, (rawTime - pts[index]) / (next - pts[index])));
-  return {state: 'playing', session: session.session, url: session.url,
-    rawVideoTimeS: rawTime, frameIndex: index, currentTime: (index + phase) / session.fps};
+
+export function resolveFleetVideo(sync, variant, carID, mapTimestampMs) {
+  const scenarioKey = (variant || 'staggered').toLowerCase();
+  const scenarioConfig = sync[scenarioKey] || sync['staggered'];
+  const carCfg = scenarioConfig ? scenarioConfig[carID] : null;
+
+  if (!carCfg) {
+    return {
+      state: 'waiting',
+      url: null,
+      currentTime: 0,
+      message: `Car ${carID} not found in scenario ${scenarioKey}`
+    };
+  }
+
+  const baseStartMs = Date.parse(sync.start || '2026-09-20T12:00:00Z');
+  const launchDelayMs = (carCfg.launchDelaySeconds || 0) * 1000;
+  const launchTimestampMs = baseStartMs + launchDelayMs;
+
+  if (mapTimestampMs < launchTimestampMs) {
+    const waitSec = ((launchTimestampMs - mapTimestampMs) / 1000).toFixed(1);
+    return {
+      state: 'waiting',
+      url: null,
+      currentTime: 0,
+      message: `Launches in ${waitSec}s (${carCfg.firstSession})`
+    };
+  }
+
+  const sessionOrder = ['session2', 'session3', 'session4', 'session5'];
+  const sessionDurations = {
+    session2: 482.0,
+    session3: 245.0,
+    session4: 310.0,
+    session5: 140.0,
+  };
+  const gaps = {
+    session2: 1.610,
+    session3: 5.615,
+    session4: 3.919,
+  };
+  const startOffsets = {
+    session2: 8.902,
+    session3: 0.118,
+    session4: 0.043,
+    session5: 0.294,
+  };
+
+  const firstSession = carCfg.firstSession || 'session2';
+  const startIndex = sessionOrder.indexOf(firstSession);
+  const initialOffset = carCfg.videoAtLaunchSeconds !== undefined ? carCfg.videoAtLaunchSeconds : (startOffsets[firstSession] || 0);
+
+  let elapsedSinceLaunchSec = (mapTimestampMs - launchTimestampMs) / 1000.0;
+
+  for (let i = startIndex; i < sessionOrder.length; i++) {
+    const sessName = sessionOrder[i];
+    const dur = sessionDurations[sessName];
+    const offset = (i === startIndex) ? initialOffset : 0;
+    const remainingInSession = dur - offset;
+
+    if (elapsedSinceLaunchSec <= remainingInSession) {
+      const currentVideoTime = offset + elapsedSinceLaunchSec;
+      const url = `/demo_view/videos/${sessName}.mp4`;
+      return {
+        state: 'playing',
+        session: sessName,
+        url: url,
+        currentTime: Math.max(0, currentVideoTime),
+        duration: dur,
+        message: `${sessName.toUpperCase()} @ ${currentVideoTime.toFixed(1)}s`
+      };
+    }
+
+    elapsedSinceLaunchSec -= remainingInSession;
+
+    const gapSec = gaps[sessName] || 0;
+    if (elapsedSinceLaunchSec < gapSec) {
+      return {
+        state: 'recording_gap',
+        session: sessName,
+        url: null,
+        currentTime: 0,
+        message: `Recording Gap (${gapSec.toFixed(1)}s between ${sessName} and ${sessionOrder[i+1]})`
+      };
+    }
+
+    elapsedSinceLaunchSec -= gapSec;
+  }
+
+  return {
+    state: 'finished',
+    url: null,
+    currentTime: 0,
+    message: 'Fleet Patrol Mission Completed'
+  };
 }

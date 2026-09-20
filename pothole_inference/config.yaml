@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/basetenlabs/truss/main/truss/config.schema.json
+model_name: pothole-yolo-inference
+python_version: py312
+requirements:
+  - ultralytics
+  - opencv-python-headless
+  - numpy
+resources:
+  accelerator: null
+  cpu: '2'
+  memory: 4Gi
+  use_gpu: false

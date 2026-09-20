@@ -1,15 +1,17 @@
 """Read-only browser replay of the frozen test-drive export."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import gzip
 import json
 import os
 import re
 from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Body, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, RedirectResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,13 +24,27 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("road_viewer")
 
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    integrations=[FastApiIntegration()],
+    traces_sample_rate=1.0,
+)
+
 # Ensure repository root is in sys.path when executed directly as a script
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from road_viewer.tiger_db import init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole
+from road_viewer.tiger_db import (
+    init_db, seed_sample_potholes, get_potholes, add_pothole, update_pothole, delete_pothole,
+    add_simulated_detection, get_simulated_detections, get_simulated_detection_by_id, delete_simulated_detection,
+    add_detection, get_detections, get_detection_by_id, delete_detection,
+    seed_simulated_detections, clear_simulated_detections, get_simulated_car_observations,
+    upsert_or_merge_pothole, get_simulated_car_imu_samples
+)
 from alert_service.potholes import fetch_active_potholes, severity_label, invalidate_potholes_cache
+from alert_service.alert_math import haversine_distance_m
+
 from route_planner.cost import RoutingConfig
 from route_planner.graph import geocode_address, load_road_graph_for_route, nearest_node, suggest_addresses
 from route_planner.router import find_routes
@@ -201,13 +217,22 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
     def create_pothole(payload: dict = Body(...)):
         if "latitude" not in payload or "longitude" not in payload:
             raise HTTPException(400, "Latitude and Longitude are required")
-        new_record = add_pothole(
+        result = upsert_or_merge_pothole(
             latitude=float(payload["latitude"]),
             longitude=float(payload["longitude"]),
-            severity=str(payload.get("severity", "MEDIUM"))
+            severity=str(payload.get("severity", "MEDIUM")),
+            confidence=float(payload.get("confidence", 0.85)),
+            detected_by_vision=bool(payload.get("detected_by_vision", payload.get("yolo", False))),
+            detected_by_imu=bool(payload.get("detected_by_imu", payload.get("imu", False))),
+            radius_m=15.0,
         )
         invalidate_potholes_cache()
-        return new_record
+        resp_data = dict(result.get("pothole") or {})
+        resp_data["status"] = result.get("status", "inserted")
+        resp_data["merged"] = (result.get("status") == "merged")
+        resp_data["merged_with_id"] = result.get("merged_with_id")
+        resp_data["distance_m"] = result.get("distance_m")
+        return resp_data
 
     @app.put("/api/potholes/{pothole_id}")
     def modify_pothole(pothole_id: int, payload: dict = Body(...)):
@@ -236,6 +261,219 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
         invalidate_potholes_cache()
         return {"status": "ok", "potholes": get_potholes()}
 
+    @app.get("/api/simulated-detections")
+    @app.get("/api/simulated_detections")
+    @app.get("/api/detections")
+    def list_simulated_detections(
+        car_id: Optional[str] = None,
+        imu: Optional[bool] = None,
+        yolo: Optional[bool] = None,
+        order: str = "desc",
+        limit: int = 500,
+    ):
+        return get_simulated_detections(car_id=car_id, imu=imu, yolo=yolo, order=order, limit=limit)
+
+    @app.get("/api/simulated-car-observations")
+    @app.get("/api/car-observations")
+    def list_simulated_car_observations(
+        scenario: str = "staggered",
+        car_id: Optional[str] = None,
+        order: str = "asc",
+        limit: int = 50000,
+    ):
+        return get_simulated_car_observations(
+            car_id=car_id,
+            scenario=scenario,
+            order=order,
+            limit=limit,
+        )
+
+    @app.get("/api/simulated-car-imu-samples")
+    @app.get("/api/imu-samples")
+    def list_simulated_car_imu_samples(
+        car_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        window_seconds: float = 5.0,
+        stride: int = 1,
+    ):
+        return get_simulated_car_imu_samples(
+            car_id=car_id,
+            timestamp=timestamp,
+            window_seconds=window_seconds,
+            stride=stride,
+        )
+
+    @app.get("/api/fleet-sync")
+    def fleet_video_sync_endpoint():
+        # If user downloaded video_sync.json to demo_view/videos or repo, load it
+        sync_candidates = [
+            ROOT / "demo_view" / "videos" / "video_sync.json",
+            ROOT / "demo_view" / "video_sync.json",
+            ROOT / "reports" / "fleet_sessions_2_5" / "video_sync.json",
+        ]
+        for p in sync_candidates:
+            if p.is_file():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.warning(f"Error reading {p}: {e}")
+
+        # Built-in specification matching the developer handoff doc
+        return {
+            "start": "2026-09-20T12:00:00Z",
+            "sessions": {
+                "session2": {"duration": 482.0, "videoOffsetSeconds": 0.378, "url": "/demo_view/videos/session2.mp4"},
+                "session3": {"duration": 245.0, "videoOffsetSeconds": 0.438, "url": "/demo_view/videos/session3.mp4"},
+                "session4": {"duration": 310.0, "videoOffsetSeconds": 0.363, "url": "/demo_view/videos/session4.mp4"},
+                "session5": {"duration": 140.0, "videoOffsetSeconds": 0.614, "url": "/demo_view/videos/session5.mp4"}
+            },
+            "gaps": {
+                "session2_3": 1.610,
+                "session3_4": 5.615,
+                "session4_5": 3.919
+            },
+            "staggered": {
+                "sim-waterloo-2to5-staggered-01": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-staggered-02": {"firstSession": "session3", "imuStartSeconds": 0.320, "videoAtLaunchSeconds": 0.118, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-staggered-03": {"firstSession": "session4", "imuStartSeconds": 0.320, "videoAtLaunchSeconds": 0.043, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-staggered-04": {"firstSession": "session5", "imuStartSeconds": 0.320, "videoAtLaunchSeconds": 0.294, "launchDelaySeconds": 0}
+            },
+            "cascade": {
+                "sim-waterloo-2to5-cascade-01": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 0},
+                "sim-waterloo-2to5-cascade-02": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 20},
+                "sim-waterloo-2to5-cascade-03": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 40},
+                "sim-waterloo-2to5-cascade-04": {"firstSession": "session2", "imuStartSeconds": 9.280, "videoAtLaunchSeconds": 8.902, "launchDelaySeconds": 60}
+            }
+        }
+
+    @app.post("/api/simulated-detections/seed")
+    @app.post("/api/simulated_detections/seed")
+    def seed_detections_endpoint(payload: Optional[dict] = Body(None)):
+        clear = True if payload is None else payload.get("clear_existing", True)
+        records = seed_simulated_detections(clear_existing=clear)
+        return {
+            "status": "ok",
+            "count": len(records),
+            "records": records,
+            "vehicles": list(set(r["car_id"] for r in records))
+        }
+
+    @app.post("/api/simulated-detections/clear")
+    @app.post("/api/simulated_detections/clear")
+    @app.delete("/api/simulated-detections")
+    @app.delete("/api/simulated_detections")
+    def clear_detections_endpoint(car_id: Optional[str] = None):
+        count = clear_simulated_detections(car_id=car_id)
+        return {"status": "ok", "cleared": count}
+
+    @app.post("/api/simulated-detections/ingest")
+    @app.post("/api/simulated_detections/ingest")
+    def ingest_anomaly_to_pothole(payload: dict = Body(...)):
+        lat = payload.get("latitude") if payload.get("latitude") is not None else payload.get("lattitude")
+        lon = payload.get("longitude")
+        if lat is None or lon is None:
+            raise HTTPException(400, "latitude and longitude are required")
+
+        lat = float(lat)
+        lon = float(lon)
+        imu_val = bool(payload.get("imu", False))
+        yolo_val = bool(payload.get("yolo", False))
+        car_id = str(payload.get("car_id", "simulated_car"))
+
+        # Check if nearby active pothole already exists (within 15 meters)
+        active = fetch_active_potholes(force_refresh=True)
+        for p in active:
+            dist = haversine_distance_m(lat, lon, p.lat, p.lon)
+            if dist <= 15.0:
+                return {
+                    "status": "already_exists",
+                    "message": f"Pothole already exists {round(dist, 1)}m away",
+                    "pothole": {
+                        "id": p.id,
+                        "latitude": p.lat,
+                        "longitude": p.lon,
+                        "severity": severity_label(p.severity),
+                    },
+                }
+
+        # Determine severity and confidence based on sensor agreement
+        if imu_val and yolo_val:
+            severity = "CRITICAL"
+            confidence = 0.95
+        elif imu_val:
+            severity = "MEDIUM"
+            confidence = 0.75
+        elif yolo_val:
+            severity = "MEDIUM"
+            confidence = 0.70
+        else:
+            severity = payload.get("severity", "LOW")
+            confidence = 0.50
+
+        new_pothole = add_pothole(
+            latitude=lat,
+            longitude=lon,
+            severity=severity,
+            confidence=confidence,
+            detected_by_vision=yolo_val,
+            detected_by_imu=imu_val,
+        )
+        invalidate_potholes_cache()
+        return {
+            "status": "created",
+            "message": f"Ingested {severity} pothole into central database",
+            "pothole": new_pothole,
+        }
+
+    @app.get("/api/simulated-detections/{detection_id}")
+    @app.get("/api/simulated_detections/{detection_id}")
+    @app.get("/api/detections/{detection_id}")
+    def fetch_simulated_detection(detection_id: int):
+        record = get_simulated_detection_by_id(detection_id)
+        if not record:
+            raise HTTPException(404, "Simulated detection not found")
+        return record
+
+    @app.post("/api/simulated-detections")
+    @app.post("/api/simulated_detections")
+    @app.post("/api/detections")
+    def create_simulated_detection(payload: dict = Body(...)):
+        lat = payload.get("latitude") if payload.get("latitude") is not None else payload.get("lattitude")
+        lon = payload.get("longitude")
+        car_id = payload.get("car_id")
+        if lat is None or lon is None or car_id is None:
+            raise HTTPException(400, "latitude, longitude, and car_id are required")
+
+        ts = payload.get("timestamp")
+        if ts is None:
+            ts = int(time.time() * 1000)
+
+        imu_val = bool(payload.get("imu", False))
+        yolo_val = bool(payload.get("yolo", False))
+        rq = payload.get("road_quality")
+
+        new_record = add_simulated_detection(
+            timestamp=int(ts),
+            imu=imu_val,
+            yolo=yolo_val,
+            latitude=float(lat),
+            longitude=float(lon),
+            car_id=str(car_id),
+            road_quality=rq,
+        )
+        return new_record
+
+    @app.delete("/api/simulated-detections/{detection_id}")
+    @app.delete("/api/simulated_detections/{detection_id}")
+    @app.delete("/api/detections/{detection_id}")
+    def remove_simulated_detection(detection_id: int):
+        success = delete_simulated_detection(detection_id)
+        if not success:
+            raise HTTPException(404, "Simulated detection not found")
+        return {"status": "ok", "deleted_id": detection_id}
+
+
     @app.get("/api/geocode/suggest")
     def geocode_suggest(q: str, limit: int = 5):
         return suggest_addresses(q, limit=limit)
@@ -252,11 +490,21 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
     ):
         t0 = time.monotonic()
         logger.info("compute_route: origin=%r destination=%r", origin, destination)
+        # Geocoding is network-bound and was the single largest cost in a
+        # search where the user typed addresses rather than picking
+        # autocomplete suggestions. The two lookups are independent, so
+        # running them concurrently costs one round trip instead of two.
         try:
-            if origin_lat is None or origin_lon is None:
-                origin_lat, origin_lon = geocode_address(origin)
-            if dest_lat is None or dest_lon is None:
-                dest_lat, dest_lon = geocode_address(destination)
+            need_origin = origin_lat is None or origin_lon is None
+            need_dest = dest_lat is None or dest_lon is None
+            if need_origin or need_dest:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    origin_future = pool.submit(geocode_address, origin) if need_origin else None
+                    dest_future = pool.submit(geocode_address, destination) if need_dest else None
+                    if origin_future is not None:
+                        origin_lat, origin_lon = origin_future.result()
+                    if dest_future is not None:
+                        dest_lat, dest_lon = dest_future.result()
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         logger.info(
@@ -575,9 +823,17 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
         except Exception as exc:
             logger.warning(f"Camera WebSocket error from {client}: {exc}")
 
+    @app.get("/demo")
+    def demo_redirect():
+        return RedirectResponse(url="/demo_view/")
+
+    demo_dir = ROOT / "demo_view"
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/demo_view", StaticFiles(directory=demo_dir, html=True), name="demo_view")
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     app.mount("/vendor/leaflet", StaticFiles(directory=HERE / "node_modules/leaflet/dist", check_dir=False), name="leaflet")
     return app
+
 
 
 def main():
@@ -587,8 +843,8 @@ def main():
     parser.add_argument("--export", type=Path, help="Replay export directory containing manifest.json")
     parser.add_argument("--filters", type=Path, help="Optional alert profiles directory")
     args = parser.parse_args()
-    if not (HERE / "node_modules/leaflet/dist").is_dir():
-        parser.error("Leaflet is missing. Run npm ci --prefix road_viewer first.")
+    leaflet_dist = HERE / "node_modules/leaflet/dist"
+    leaflet_dist.mkdir(parents=True, exist_ok=True)
     uvicorn.run(create_app(args.export, args.filters), host=args.host, port=args.port, access_log=False)
 
 
