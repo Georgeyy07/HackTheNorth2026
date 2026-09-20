@@ -24,18 +24,27 @@ export default function MotionScreen() {
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
   const cameraRef = useRef(null);
   const filming = useRef(null); // { tag, pending: Promise<{uri}> } while a demo clip is recording
-  const cameraReady = useRef(null); // { resolve(ready) } for the pending CameraView mount
+  const cameraReadyRef = useRef(false); // set synchronously by onCameraReady; read via polling below
   const active = recorder.status !== 'idle';
   const sample = recorder.live?.sample;
-  const showCamera = active && cameraPermission?.granted;
+  // Mounted as soon as permission is granted, not gated on `active`: mounting
+  // it only when recording starts raced onCameraReady against recordAsync()
+  // and threw CameraOutputNotReadyException. Mounting early gives the native
+  // camera time to warm up before Start is ever pressed.
+  const showCamera = cameraPermission?.granted;
 
-  // CameraView finishes native init well after it mounts; recordAsync throws
-  // until onCameraReady fires, so wait for it (bounded) instead of guessing.
+  // onCameraReady can fire before the native recording pipeline (not just
+  // the preview) is actually ready to record -- a known expo-camera gap, not
+  // just an ordering bug here. Poll a ref (always current, unlike state
+  // captured in this closure) and add a short buffer after it flips.
   const waitForCameraReady = (timeoutMs = 4000) => new Promise((resolve) => {
-    let settled = false;
-    const finish = (ready) => { if (!settled) { settled = true; resolve(ready); } };
-    cameraReady.current = { resolve: () => finish(true) };
-    setTimeout(() => finish(false), timeoutMs);
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      if (cameraReadyRef.current) resolve(true);
+      else if (Date.now() >= deadline) resolve(false);
+      else setTimeout(check, 100);
+    };
+    check();
   });
 
   // Runs on every stop path (button, app-backgrounded, screen-unmounted), not
@@ -65,6 +74,11 @@ export default function MotionScreen() {
       // The demo clip is a bonus for showing the run later; never let it block
       // or fail the IMU/GPS recording that the model actually depends on.
       if (ok && readyPromise && await readyPromise && cameraRef.current) {
+        // onCameraReady flipping true still isn't a hard guarantee the
+        // recording pipeline specifically is ready (confirmed: this exact
+        // exception recurred with the plain ready-check alone) -- a short
+        // settle delay closes that gap in practice.
+        await new Promise((resolve) => setTimeout(resolve, 400));
         filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
       }
     } catch (err) { Alert.alert('Mount settings', err.message); }
@@ -231,7 +245,7 @@ export default function MotionScreen() {
       {showCamera && <View style={styles.card}>
         <Text style={styles.heading}>Demonstration video</Text>
         <CameraView ref={cameraRef} style={styles.camera} facing="back" mode="video"
-          onCameraReady={() => cameraReady.current?.resolve()} />
+          onCameraReady={() => { cameraReadyRef.current = true; }} />
         <Text style={styles.description}>Filming alongside the recording, for a visual demo of the run · saved next to this session's export.</Text>
       </View>}
       <View style={styles.card}>

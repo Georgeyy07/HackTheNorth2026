@@ -4,3 +4,11 @@ uvicorn==0.27.0
 pandas==2.1.4
 pyarrow==22.0.0
 websockets>=12.0
+# route_planner imports these but they were missing here, which crashes
+# server.py on import (route_planner -> networkx/osmnx/folium/requests)
+networkx
+osmnx
+folium
+requests
+# error monitoring + tracing (see server.py's sentry_sdk.init() call)
+sentry-sdk[fastapi]

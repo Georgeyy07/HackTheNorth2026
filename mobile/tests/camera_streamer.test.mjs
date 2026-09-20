@@ -4,7 +4,7 @@ import {
   CAMERA_FRAME_INTERVAL_MS,
   DEFAULT_MAX_TILT_DEGREES,
   shouldStreamCamera,
-} from '../src/motion/useCameraStreamer.js';
+} from '../src/motion/cameraStreamConfig.js';
 
 test('CAMERA_FRAME_INTERVAL_MS produces 15+ frames per second', () => {
   // 15 fps = 1000 / 15 ≈ 66.67ms. Interval must be <= 66.6ms to ensure 15+ fps

@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+import sentry_sdk
+
 logger = logging.getLogger("tiger_db")
 
 # Helper to automatically load workspace .env file
@@ -175,8 +177,9 @@ def get_potholes(severity: Optional[str] = None) -> List[Dict[str, Any]]:
         params.append(severity)
         
     query += " ORDER BY id DESC"
-    
-    cursor.execute(query, params)
+
+    with sentry_sdk.start_span(op="db.query", name="tiger_db.get_potholes"):
+        cursor.execute(query, params)
     
     if USE_POSTGRES:
         colnames = [desc[0] for desc in cursor.description]
@@ -222,7 +225,8 @@ def add_pothole(
         VALUES (%s, %s, %s, %s)
         RETURNING id;
         """
-        cursor.execute(sql, (latitude, longitude, sev_val, now_iso))
+        with sentry_sdk.start_span(op="db.query", name="tiger_db.add_pothole"):
+            cursor.execute(sql, (latitude, longitude, sev_val, now_iso))
         new_id = cursor.fetchone()[0]
         conn.commit()
     else:
@@ -230,7 +234,8 @@ def add_pothole(
         INSERT INTO potholes (latitude, longitude, severity, timestamp)
         VALUES (?, ?, ?, ?);
         """
-        cursor.execute(sql, (latitude, longitude, sev_val, now_iso))
+        with sentry_sdk.start_span(op="db.query", name="tiger_db.add_pothole"):
+            cursor.execute(sql, (latitude, longitude, sev_val, now_iso))
         new_id = cursor.lastrowid
         conn.commit()
         
@@ -277,8 +282,9 @@ def update_pothole(
     ph_clause = f"WHERE id = {placeholder}"
     params.append(pothole_id)
     sql = f"UPDATE potholes SET {', '.join(set_clauses)} {ph_clause}"
-    
-    cursor.execute(sql, tuple(params))
+
+    with sentry_sdk.start_span(op="db.query", name="tiger_db.update_pothole"):
+        cursor.execute(sql, tuple(params))
     conn.commit()
     affected = cursor.rowcount > 0
     cursor.close()
@@ -292,7 +298,8 @@ def delete_pothole(pothole_id: int) -> bool:
     cursor = conn.cursor()
     
     sql = "DELETE FROM potholes WHERE id = ?" if not USE_POSTGRES else "DELETE FROM potholes WHERE id = %s"
-    cursor.execute(sql, (pothole_id,))
+    with sentry_sdk.start_span(op="db.query", name="tiger_db.delete_pothole"):
+        cursor.execute(sql, (pothole_id,))
     conn.commit()
     affected = cursor.rowcount > 0
     cursor.close()

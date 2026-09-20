@@ -1,5 +1,6 @@
 """Read-only browser replay of the frozen test-drive export."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import gzip
 import json
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.gzip import GZipMiddleware
@@ -21,6 +24,17 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("road_viewer")
+
+# One-time Sentry setup for the whole process. dsn=None (SENTRY_DSN unset,
+# e.g. local dev) makes the SDK a safe no-op instead of erroring, so this is
+# always safe to leave in. traces_sample_rate=1.0 sends every request as a
+# trace (Tracing product) — fine for a hackathon-scale demo, would want to
+# lower this for a real production volume.
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    integrations=[FastApiIntegration()],
+    traces_sample_rate=1.0,
+)
 
 # Ensure repository root is in sys.path when executed directly as a script
 ROOT = Path(__file__).resolve().parent.parent
@@ -293,11 +307,21 @@ def create_app(export=None, filters=None):
     ):
         t0 = time.monotonic()
         logger.info("compute_route: origin=%r destination=%r", origin, destination)
+        # Geocoding is network-bound and was the single largest cost in a
+        # search where the user typed addresses rather than picking
+        # autocomplete suggestions. The two lookups are independent, so
+        # running them concurrently costs one round trip instead of two.
         try:
-            if origin_lat is None or origin_lon is None:
-                origin_lat, origin_lon = geocode_address(origin)
-            if dest_lat is None or dest_lon is None:
-                dest_lat, dest_lon = geocode_address(destination)
+            need_origin = origin_lat is None or origin_lon is None
+            need_dest = dest_lat is None or dest_lon is None
+            if need_origin or need_dest:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    origin_future = pool.submit(geocode_address, origin) if need_origin else None
+                    dest_future = pool.submit(geocode_address, destination) if need_dest else None
+                    if origin_future is not None:
+                        origin_lat, origin_lon = origin_future.result()
+                    if dest_future is not None:
+                        dest_lat, dest_lon = dest_future.result()
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         logger.info(

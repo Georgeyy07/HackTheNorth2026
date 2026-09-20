@@ -43,3 +43,6 @@ playwright-report/
 *.pem
 *.key
 .ssh/
+
+# Claude Code local state (from adding-dockerfile)
+.claude/
