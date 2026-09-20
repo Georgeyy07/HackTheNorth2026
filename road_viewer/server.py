@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
@@ -348,125 +348,6 @@ def create_app(export=None, filters=None):
     @app.get("/favicon.ico", status_code=204)
     def favicon():
         return Response(status_code=204)
-
-    @app.websocket("/ws/imu")
-    async def websocket_imu(websocket: WebSocket):
-        await websocket.accept()
-        client = websocket.client.host if websocket.client else "unknown"
-        logger.info(f"IMU WebSocket connected from {client}")
-        total_samples = 0
-        try:
-            while True:
-                data = await websocket.receive_text()
-                try:
-                    payload = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-                if isinstance(payload, dict) and payload.get("type") == "handshake":
-                    logger.info(f"IMU client {client} ({payload.get('client', 'device')}) sent handshake: {payload}")
-                    # print(f"[IMU 100Hz] Client {client} ({payload.get('client', 'device')}) connected and ready to stream", flush=True)
-                    await websocket.send_json({"status": "ready", "server": "road_viewer"})
-                    continue
-
-                if isinstance(payload, dict) and (payload.get("type") == "camera_frame" or "frame_number" in payload):
-                    frame_num = payload.get("frame_number", 0)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
-                    continue
-
-                if isinstance(payload, dict) and "samples" in payload:
-                    samples = payload.get("samples") or []
-                    batch_id = payload.get("batch_id", "")
-                    gps_batch = payload.get("gps") or {}
-                    if not samples:
-                        pass
-                    for s in samples:
-                        total_samples += 1
-                        time_val = s.get("time") or s.get("timestamp") or s.get("time_s")
-                        ax = s.get("accel_x")
-                        ay = s.get("accel_y")
-                        az = s.get("accel_z")
-                        gx = s.get("gyro_x")
-                        gy = s.get("gyro_y")
-                        gz = s.get("gyro_z")
-                        speed = s.get("speed")
-                        lat = s.get("latitude") if s.get("latitude") is not None else gps_batch.get("latitude")
-                        lon = s.get("longitude") if s.get("longitude") is not None else gps_batch.get("longitude")
-
-                        # Print all IMU data: x/y/z accelerometer, gyro, speed, and GPS coordinates
-                        # print(
-                        #     f"[IMU 100Hz] #{total_samples:06d} | "
-                        #     f"t={time_val}s | "
-                        #     f"Accel: X={ax} Y={ay} Z={az} m/s^2 | "
-                        #     f"Gyro: X={gx} Y={gy} Z={gz} rad/s | "
-                        #     f"Speed: {speed} m/s | "
-                        #     f"GPS: ({lat}, {lon})",
-                        #     flush=True,
-                        # )
-
-                    await websocket.send_json({
-                        "status": "ok",
-                        "batch_id": batch_id,
-                        "received_samples": len(samples),
-                        "total_samples": total_samples,
-                    })
-                elif isinstance(payload, dict):
-                    total_samples += 1
-                    time_val = payload.get("time") or payload.get("timestamp") or payload.get("time_s")
-                    ax = payload.get("accel_x")
-                    ay = payload.get("accel_y")
-                    az = payload.get("accel_z")
-                    gx = payload.get("gyro_x")
-                    gy = payload.get("gyro_y")
-                    gz = payload.get("gyro_z")
-                    speed = payload.get("speed")
-                    lat = payload.get("latitude")
-                    lon = payload.get("longitude")
-
-                    # print(
-                    #     f"[IMU 100Hz] #{total_samples:06d} | "
-                    #     f"t={time_val}s | "
-                    #     f"Accel: X={ax} Y={ay} Z={az} m/s^2 | "
-                    #     f"Gyro: X={gx} Y={gy} Z={gz} rad/s | "
-                    #     f"Speed: {speed} m/s | "
-                    #     f"GPS: ({lat}, {lon})",
-                    #     flush=True,
-                    # )
-
-                    await websocket.send_json({
-                        "status": "ok",
-                        "received_samples": 1,
-                        "total_samples": total_samples,
-                    })
-        except WebSocketDisconnect:
-            logger.info(f"IMU WebSocket disconnected from {client} after {total_samples} samples")
-        except Exception as exc:
-            logger.warning(f"IMU WebSocket error from {client}: {exc}")
-
-    @app.websocket("/ws/camera")
-    async def websocket_camera(websocket: WebSocket):
-        await websocket.accept()
-        client = websocket.client.host if websocket.client else "unknown"
-        logger.info(f"Camera WebSocket connected from {client}")
-        frame_count = 0
-        try:
-            while True:
-                data = await websocket.receive_text()
-                try:
-                    payload = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-                if isinstance(payload, dict):
-                    frame_count += 1
-                    frame_num = payload.get("frame_number", frame_count)
-                    print(f"recieved camera frame {frame_num}", flush=True)
-                    await websocket.send_json({"status": "ok", "type": "camera_ack", "frame": frame_num})
-        except WebSocketDisconnect:
-            logger.info(f"Camera WebSocket disconnected from {client} after {frame_count} frames")
-        except Exception as exc:
-            logger.warning(f"Camera WebSocket error from {client}: {exc}")
 
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     app.mount("/vendor/leaflet", StaticFiles(directory=HERE / "node_modules/leaflet/dist", check_dir=False), name="leaflet")
