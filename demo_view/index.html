@@ -53,6 +53,19 @@
   <!-- Main Map & Floating Telemetry Panels -->
   <main class="main-container">
     <div id="map"></div>
+    <section id="navigation-panel" hidden aria-label="Navigation scenario">
+      <h2 id="nav-title"></h2>
+      <p>Columbia Street West → MidCampus Drive</p>
+      <strong id="nav-guidance"></strong>
+      <p id="nav-eta"></p>
+      <div id="nav-alert" hidden role="status"></div>
+      <div id="nav-decision" hidden role="status"></div>
+      <label><input id="nav-voice" type="checkbox" checked> Voice alerts</label>
+      <small id="nav-voice-status"></small>
+      <p class="navigation-assumption">Blue: your car and active route. A/B: recorded reporting cars.<br>
+        Green dashed bypass: assumed-good surface for this demo. Your car's motion is simulated.</p>
+      <h3>Fleet reports</h3><div id="nav-events"></div>
+    </section>
 
     <!-- Floating Real-Time Anomaly Toast Notification -->
     <div class="anomaly-toast-banner" id="anomaly-toast">
@@ -195,6 +208,8 @@
           title="Choose simulated scenario from simulated_car_observations">
           <option value="staggered" selected>Scenario: Staggered (Simultaneous)</option>
           <option value="cascade">Scenario: Cascade (20s Delays)</option>
+          <option value="warning">Scenario: 200 m Pothole Warning</option>
+          <option value="reroute">Scenario: Automatic Rerouting</option>
         </select>
 
         <select class="filter-select" id="vehicle-filter">

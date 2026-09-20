@@ -1256,3 +1256,21 @@ input:checked + .toggle-slider:before {
     align-items: stretch;
   }
 }
+
+/* Navigation scenarios share the map and replay controls. */
+#navigation-panel { position:absolute; top:16px; right:16px; z-index:800; width:310px;
+  max-height:calc(100% - 32px); overflow:auto; padding:18px; border-radius:12px;
+  background:var(--parchment-card, #fff9ed); border:1px solid #bda98a; box-shadow:0 4px 18px #0003; }
+#navigation-panel[hidden], #navigation-panel [hidden] { display:none !important; }
+#navigation-panel h2 { font-size:19px; margin:0 0 10px; }
+#navigation-panel p { font-size:13px; line-height:1.5; margin:10px 0; }
+#navigation-panel h3 { font-size:14px; }
+#nav-alert, #nav-decision { padding:10px; margin:10px 0; background:#ffe0af; border-radius:6px; font-weight:bold; }
+#nav-decision { background:#dcebd8; }
+#nav-events { max-height:150px; overflow:auto; font-size:12px; }
+#nav-events > div { padding:8px 0; border-top:1px solid #d8c9ad; }
+#nav-voice-status { display:block; }
+.navigation-assumption { color:#65533c; }
+.navigation-car { width:38px; height:38px; border:3px solid white; border-radius:50%; color:white;
+  display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:13px; box-shadow:0 2px 6px #0005; }
+@media(max-width:750px) { #navigation-panel { width:230px; max-height:45%; } }
