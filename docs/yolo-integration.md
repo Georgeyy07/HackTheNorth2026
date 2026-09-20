@@ -15,25 +15,18 @@ main backend. Those connections are implemented here.
 `models/yolo26/best.pt` is checksum-bound by `vision_inference/manifest.json`.
 Its SHA-256 is
 `d5c7326eb9274d663b94e955bd373854a7b175c4a746df23a761c3f1687c7445`.
-This is the branch's committed checkpoint, verified byte-for-byte against
-`best.pt` from Baseten project **wx42dyq**, training job **32oo70w**, team **11**.
-It is a YOLO26n model trained with Ultralytics 8.4.155 and has **one class,
-pothole**. The source also includes crack-training code, but this checkpoint
-does not detect cracks.
+The deployed checkpoint is the user-selected file
+`/home/origami/pothole/best.pt`, copied byte-for-byte into the repository and
+verified before packaging. It also exactly matches the earlier branch artifact
+and Baseten training job **32oo70w** in project **wx42dyq**. The file contains a
+YOLO26n detector trained with Ultralytics 8.4.155 and **one class: pothole**.
+The deployment uses this supplied file directly; no training-run recovery is required.
 
-The requested job **wx22n53** was audited separately: Baseten reports STOPPED,
-checkpoint synchronization COMPLETED, and zero files from both the registered
-checkpoint endpoint and the raw checkpoint-file endpoint. Its logs end around
-epoch 6/50. Its downloaded training source copies best.pt and last.pt to the
-persistent checkpoint directory only after model.train returns. No output from
-that run has been substituted or claimed as deployed.
-
-The initial Dedicated Inference deployment under **Hack the North** uses the
-verified branch checkpoint above:
+The production Dedicated Inference deployment is under **Hack the North**:
 
 - Model `31l2451q`, `roughroute-yolo26-potholes`.
-- [Deployment logs](https://app.baseten.co/models/31l2451q/logs/wn4epl4).
-- URL `https://model-31l2451q.api.baseten.co/deployment/wn4epl4/predict`.
+- [Deployment logs](https://app.baseten.co/models/31l2451q/logs/w60x715).
+- URL `https://model-31l2451q.api.baseten.co/deployment/w60x715/predict`.
 - Ordinary PyTorch CPU inference; source weights are unchanged.
 
 ## Configure the combined FastAPI backend
@@ -48,7 +41,7 @@ Keep the IMU settings from [imu-baseten.md](imu-baseten.md), and set:
 
 ```dotenv
 YOLO_INFERENCE_ENABLED=true
-YOLO_BASETEN_PREDICT_URL=https://model-31l2451q.api.baseten.co/deployment/wn4epl4/predict
+YOLO_BASETEN_PREDICT_URL=https://model-31l2451q.api.baseten.co/deployment/w60x715/predict
 YOLO_PUBLISH_POTHOLES=true
 ```
 

@@ -67,7 +67,7 @@ def main():
     target.write_bytes(data)
     manifest_path = ROOT/'vision_inference/manifest.json'
     manifest = json.loads(manifest_path.read_text())
-    manifest.update(training_project_id=args.project, training_job_id=args.job,
+    manifest.update(checkpoint_source="baseten-training-job", training_project_id=args.project, training_job_id=args.job,
                     source_path=args.filename, checkpoint_sha256=hashlib.sha256(data).hexdigest(), classes=names,
                     note='Checkpoint downloaded from the explicitly selected Baseten training job.')
     manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')

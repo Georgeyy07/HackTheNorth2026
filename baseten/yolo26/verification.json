@@ -5,9 +5,10 @@
   "local_cloud_frame_detections": 0,
   "fallback_fastapi": "real weights loaded; real JPEG accepted; invalid image rejected",
   "tiger_smoke": {
-    "frame_id": "f4592bcf-18df-475f-a8f9-ef82dc694d78",
-    "provider": "baseten",
+    "frame_id": "2dec4943-7f5a-4fe6-aa89-9e720c304428",
     "storage": "postgresql",
+    "provider": "baseten",
+    "checkpoint_sha256": "d5c7326eb9274d663b94e955bd373854a7b175c4a746df23a761c3f1687c7445",
     "detections": 0,
     "retry_idempotent": true,
     "potholes_created": 0,
@@ -20,5 +21,14 @@
   "wheel_metadata_verified": true,
   "physical_phone_tested": false,
   "docker_build_tested": false,
-  "scope": "Integration and inference plumbing, not a model accuracy evaluation"
+  "scope": "Integration and inference plumbing, not a model accuracy evaluation",
+  "user_file_deployment": {
+    "source_file": "/home/origami/pothole/best.pt",
+    "source_repo_bundle_sha256_match": true,
+    "deployment_id": "w60x715",
+    "status": "ACTIVE",
+    "production": true,
+    "local_cloud_match": true,
+    "vision_tests_passed": 10
+  }
 }
