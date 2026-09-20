@@ -25,6 +25,7 @@ export default function MotionScreen() {
   const cameraRef = useRef(null);
   const filming = useRef(null); // { tag, pending: Promise<{uri}> } while a demo clip is recording
   const cameraReadyRef = useRef(false); // set synchronously by onCameraReady; read via polling below
+  const [videoNote, setVideoNote] = useState(null); // why the last session saved without a clip
   const active = recorder.status !== 'idle';
   const sample = recorder.live?.sample;
   // Mounted as soon as permission is granted, not gated on `active`: mounting
@@ -54,12 +55,19 @@ export default function MotionScreen() {
     recorder.onStopRef.current = () => {
       const clip = filming.current;
       filming.current = null;
-      if (!clip) return;
+      if (!clip) return; // start() already recorded why no clip was filmed
       cameraRef.current?.stopRecording();
       clip.pending
-        .then(({ uri }) => saveRecordingVideo(clip.tag, uri))
+        .then((result) => {
+          // recordAsync resolves undefined when the native camera goes away
+          // mid-recording, which otherwise surfaced as an unreadable
+          // "cannot destructure property 'uri'" error.
+          if (!result?.uri) throw new Error('the camera stopped before it produced a file');
+          saveRecordingVideo(clip.tag, result.uri);
+          setVideoNote(null);
+        })
         .then(() => recorder.refresh())
-        .catch((err) => Alert.alert('Demo video', `Recording saved without its video: ${err.message}`));
+        .catch((err) => setVideoNote(`No video: ${err.message}`));
     };
   }, [recorder]);
 
@@ -71,16 +79,36 @@ export default function MotionScreen() {
       const tag = recordingTag();
       const readyPromise = camera.granted ? waitForCameraReady() : null;
       const ok = await recorder.start(mountMatrix(mount, ...angles.map(Number)), tag);
+      if (!ok) return;
+
       // The demo clip is a bonus for showing the run later; never let it block
       // or fail the IMU/GPS recording that the model actually depends on.
-      if (ok && readyPromise && await readyPromise && cameraRef.current) {
-        // onCameraReady flipping true still isn't a hard guarantee the
-        // recording pipeline specifically is ready (confirmed: this exact
-        // exception recurred with the plain ready-check alone) -- a short
-        // settle delay closes that gap in practice.
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
+      // Each precondition is checked separately so a session that saves
+      // without video can say which one failed -- as one combined condition
+      // this simply recorded nothing and left "No demo video" as the only
+      // clue, with no way to tell a denied permission from a slow camera.
+      if (!camera.granted) {
+        setVideoNote(camera.canAskAgain
+          ? 'No video: camera access was declined for this session.'
+          : 'No video: camera access is blocked. Enable it for Expo Go in iOS Settings > Privacy > Camera.');
+        return;
       }
+      if (!await readyPromise) {
+        setVideoNote('No video: the camera did not finish starting up in time. Try recording again.');
+        return;
+      }
+      if (!cameraRef.current) {
+        setVideoNote('No video: the camera preview was not mounted when recording began.');
+        return;
+      }
+
+      // onCameraReady flipping true still isn't a hard guarantee the
+      // recording pipeline specifically is ready (confirmed: this exact
+      // exception recurred with the plain ready-check alone) -- a short
+      // settle delay closes that gap in practice.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      setVideoNote(null);
+      filming.current = { tag, pending: cameraRef.current.recordAsync({ mute: !mic.granted }) };
     } catch (err) { Alert.alert('Mount settings', err.message); }
   };
 
@@ -257,12 +285,26 @@ export default function MotionScreen() {
           </View>
         )}
       </View>
-      {showCamera && <View style={styles.card}>
+      {/* Rendered even without camera access: when the card disappeared
+          entirely, a session that saved no video gave no hint that the
+          camera was the reason. */}
+      <View style={styles.card}>
         <Text style={styles.heading}>Demonstration video</Text>
-        <CameraView ref={cameraRef} style={styles.camera} facing="back" mode="video"
-          onCameraReady={() => { cameraReadyRef.current = true; }} />
+        {showCamera
+          ? <CameraView ref={cameraRef} style={styles.camera} facing="back" mode="video"
+              onCameraReady={() => { cameraReadyRef.current = true; }} />
+          : <>
+              <Text style={styles.description}>
+                {cameraPermission && !cameraPermission.canAskAgain
+                  ? 'Camera access is blocked, so sessions save without a demo video. Enable it for Expo Go in iOS Settings > Privacy > Camera.'
+                  : 'Camera access is off, so sessions save without a demo video.'}
+              </Text>
+              {cameraPermission?.canAskAgain !== false &&
+                <Button variant="forest" onPress={requestCameraPermission}>Enable camera</Button>}
+            </>}
+        {videoNote && <View style={styles.errorBanner}><Text style={styles.errorText}>{videoNote}</Text></View>}
         <Text style={styles.description}>Filming alongside the recording, for a visual demo of the run · saved next to this session's export.</Text>
-      </View>}
+      </View>
       <View style={styles.card}>
         <Text style={styles.heading}>Vehicle model input</Text>
         <Text style={styles.description}>Acceleration includes gravity · m/s². X forward, Y left, Z up. Speed in m/s.</Text>
