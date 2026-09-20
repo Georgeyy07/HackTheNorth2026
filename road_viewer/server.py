@@ -20,6 +20,8 @@ import uvicorn
 import sys
 import time
 import logging
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("road_viewer")
@@ -603,6 +605,7 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
             raise HTTPException(404, "Unknown frame")
         return FileResponse(path, media_type="image/jpeg")
 
+    @app.api_route("/demo_view/videos/{session_id}.mp4", methods=["GET", "HEAD"])
     @app.api_route("/api/session/{session_id}/annotated.mp4", methods=["GET", "HEAD"])
     def annotated_video(session_id: str, request: Request, download: bool = False):
         path = session_folder(session_id) / "annotated.mp4"
