@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadscope · Fleet preview</title><link rel="stylesheet" href="/vendor/leaflet/leaflet.css"><link rel="stylesheet" href="/static/fleet.css"></head>
+<body>
+<header><a class="brand" href="/">roadscope <span>Fleet preview</span></a><a href="/replay">Single-drive replay ↗</a></header>
+<main>
+<div class="heading"><div><div class="eyebrow">WATERLOO CAMPUS</div><h1>One shared road map.</h1><p>Road quality and defect detections accumulate as the cars explore campus.</p></div><div class="preview-pill">TIGER IMPORT COMPLETE · LOCAL REPLAY</div></div>
+<div class="controls"><label>Scenario <select id="variant"><option value="staggered">Simultaneous starts</option><option value="cascade">20-second cascade</option></select></label><button id="fit">Fit road map</button><button id="joint-toggle" aria-pressed="false">Show YOLO + IMU regions</button><span id="counts">Loading cars…</span></div>
+<div class="mapping-stats"><span id="mapped-count">0 road cells mapped</span><span id="imu-count">0 IMU locations</span><span id="yolo-count">0 YOLO locations</span></div>
+<p id="joint-note" class="note" hidden></p>
+<div class="workspace"><section class="map-wrap"><div id="map" aria-label="Waterloo campus map with virtual cars"></div><div class="map-caption"><span class="legend-quality good">Good</span><span class="legend-quality medium">Medium</span><span class="legend-quality bad">Bad</span><span class="legend-imu">IMU disturbance</span><span class="legend-yolo">YOLO pothole</span></div><div id="tile-warning" hidden>Street tiles unavailable; recorded routes remain visible.</div></section><aside><h2>Cars on the route</h2><div id="cars"></div></aside></div>
+<div id="error" role="alert" hidden></div>
+<section class="player"><button id="restart" aria-label="Restart">↺</button><button id="play" disabled>Play</button><div class="timeline"><div><strong id="elapsed">00:00</strong><span id="clock"></span><span id="duration"></span></div><input id="seek" type="range" min="0" max="1" value="0" step="0.001" disabled aria-label="Scenario time"></div><label>Speed <select id="rate"><option value="1">1×</option><option value="5" selected>5×</option><option value="10">10×</option><option value="20">20×</option></select></label></section>
+<p id="scenario-note" class="note"></p>
+<p class="note">Shared map: road colors summarize unique recorded patches in approximately 8 m GPS cells (majority category; ties favor rougher). Orange rings mark IMU disturbances; purple dots mark YOLO detections. Nearby detection cells are grouped into numbered markers; zoom in or click for detail. Markers indicate vehicle positions, not exact defect coordinates. Repeated virtual-car copies are counted once. Road quality and IMU flags use post-processed outputs. YOLO uses approximate video alignment; “Unknown” means no usable result. GPS gaps are shown as gaps. Scenario data is stored in Tiger; playback reads the reviewed local export.</p>
+</main><script src="/vendor/leaflet/leaflet.js"></script><script type="module" src="/static/fleet.js"></script></body></html>

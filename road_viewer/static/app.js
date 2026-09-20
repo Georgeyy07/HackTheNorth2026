@@ -1,8 +1,11 @@
+import {ordinalSession, qualityValue, qualityText, visionFrameAt} from './predictions.js';
 import {Replay, clock, upperBound} from './replay.js';
 
 const $ = id => document.getElementById(id);
 const COLORS = ['#159c78', '#d2ae36', '#e78043', '#c95268'];
 const NAMES = ['Good', 'Medium', 'Bad', 'Terrible'];
+let ordinal = false;
+let visionImageKey = null;
 const SENSOR_COLORS = ['#289b7b', '#caaa50', '#748fb7'];
 let engine = null, playing = false, position = 0, follow = true, loading = false;
 let requestNumber = 0, controller = null, lastFrame = performance.now(), lastPaint = 0;
@@ -24,6 +27,7 @@ const eventLayer = L.layerGroup().addTo(map);
 const potholeLayer = L.layerGroup().addTo(map);
 const routeFinderLayer = L.layerGroup().addTo(map);
 const renderer = L.canvas({padding: .5});
+new ResizeObserver(() => map.invalidateSize({pan: false})).observe($('map'));
 
 let tigerPotholes = [];
 const potholeMarkers = new Map();
@@ -296,6 +300,7 @@ const car = L.marker([0, 0], {zIndexOffset: 1000, interactive: false, icon: L.di
 map.on('dragstart', () => setFollow(false));
 
 function label(session) {
+  if (session.display_name) return session.display_name;
   if (session.dataset === 'kaggle') return 'Kaggle · Larisa, Greece';
   const match = session.session_id.match(/gm_(\d+)_pass_(\d+)/);
   return `LiRA · M13 · Car ${match?.[1]} / Pass ${match?.[2]}`;
@@ -332,7 +337,7 @@ async function loadSession(id, initialTime = 0, autoplay = true, profile = $('pr
   setPlaying(false); loading = true;
   $('loading').hidden = false; $('load-error').hidden = true;
   $('play').disabled = true; $('seek').disabled = true;
-  engine = null; clearMap();
+  engine = null; clearMap(); visionImageKey = undefined; $('vision-panel').hidden = true;
   for (const id of ['iri', 'speed', 'gps-state']) $(id).textContent = '—';
   $('quality-badge').textContent = 'Waiting'; $('quality-badge').style.color = '#74886b';
   $('quality-badge').style.background = '#edf4ee';
@@ -353,25 +358,39 @@ async function loadSession(id, initialTime = 0, autoplay = true, profile = $('pr
     if (!response.ok) throw new Error(`The recording service returned HTTP ${response.status}.`);
     const data = await response.json();
     if (request !== requestNumber) return;
-    engine = new Replay(data); position = 0; loading = false;
+    engine = new Replay(data); ordinal = ordinalSession(data.session); position = 0; loading = false;
+    configureQuality();
+    $('inference-status').hidden = data.session.inference_status !== 'blocked';
+    $('inference-status').textContent = data.session.inference_status === 'blocked' ? 'Baseten inference pending: both deployments are inactive and the API rejects activation. GPS and sensor readings are available; road-quality and YOLO results have not been computed.' : '';
+    $('about').hidden = data.session.inference_status === 'blocked';
+    $('method-button').hidden = data.session.inference_status === 'blocked';
+    $('vision-panel').hidden = !data.vision;
+    $('annotated-video').hidden = !data.session.annotated_video_available;
+    $('annotated-video').href = `/api/session/${encodeURIComponent(id)}/annotated.mp4`;
+    $('next-pothole').disabled = !data.vision?.frames.some(f => f.detections.length);
+    $('vision-summary').textContent = data.vision ? `${data.vision.provider === 'local_ultralytics' ? 'Local' : 'Baseten'} YOLO26 · ${data.vision.fps.toFixed(1)} fps · ${data.vision.frames.length.toLocaleString()} frames processed · ${data.vision.frames.filter(f => f.detections.length).length.toLocaleString()} frames with detections` : '';
+    $('vision-alignment').textContent = data.vision ? (Number.isFinite(data.vision.video_offset_s) ? `Approximate video alignment: ${data.vision.video_offset_s >= 0 ? '+' : ''}${data.vision.video_offset_s.toFixed(3)} s from MP4 start metadata. Boxes show pothole confidence, not severity.` : 'Video alignment is unknown; detections are not assigned to the IMU timeline.') : '';
     $('session').value = id;
     $('profile').value = profile;
-    $('profile-note').textContent = profile === 'original' ? 'Consensus + hysteresis' : profile === 'threshold' ? 'Higher precision · lower recall' : 'Experimental · fewer alerts, more misses';
+    $('profile-note').textContent = ordinal ? 'Saved calibration · Kalman Q/R 3.2 · 0.7 / 0.5 hysteresis' : profile === 'original' ? 'Consensus + hysteresis' : profile === 'threshold' ? 'Higher precision · lower recall' : 'Experimental · fewer alerts, more misses';
     $('model-line-note').textContent = profile === 'kalman' ? 'Solid: filtered · dashed: raw provisional' : 'Solid: final · dashed: provisional';
-    document.querySelector('.download').textContent = 'Original data ↓';
-    document.querySelector('.download').title = 'Download the original full export; alert comparison modes do not change it';
+    document.querySelector('.download').textContent = 'Download outputs ↓';
+    document.querySelector('.download').title = 'Download the full inference export, including predictions and input samples';
     $('session-meta').textContent = `${data.session.samples.toLocaleString()} samples · ${clock(data.session.duration_s)} drive · 100 Hz inputs`;
     $('duration').textContent = clock(data.duration_s);
     $('seek').max = String(data.duration_s);
     $('seek').disabled = false; $('play').disabled = false;
     $('loading').hidden = true;
-    $('place').textContent = data.session.dataset === 'kaggle' ? 'Larisa, Greece' : 'M13 · Copenhagen, Denmark';
+    $('place').textContent = ordinal ? 'Recorded drive · Waterloo' : data.session.dataset === 'kaggle' ? 'Larisa, Greece' : 'M13 · Copenhagen, Denmark';
     const isLira = data.session.dataset === 'lira_cd';
     $('gyro-missing').hidden = !isLira;
     $('gyro-footer').textContent = isLira ? 'Missing input · not synthesized' : 'Recorded sensor axes';
-    $('task-note').textContent = isLira
+    const providerLabel = data.session.inference_provider === 'local_pytorch' ? 'local PyTorch' : 'Baseten';
+    $('task-note').textContent = ordinal ? `Original four-model ensemble · ${providerLabel}. Calibrated good / medium / bad estimates; these sessions have no ground-truth quality labels.${data.session.session_id === 'session5' ? ' Session 5 reuses the saved car bias; it was not in the original calibration set.' : ''}` : isLira
       ? 'LiRA provides measured roughness. Disturbance predictions have no reference labels here.'
       : 'Kaggle provides disturbance labels. Roughness estimates have no measured IRI reference here.';
+    if (data.session.inference_status === 'blocked') $('task-note').textContent = 'Recorded GPS, accelerometer and speed only. No new cloud predictions have been produced.';
+    document.querySelector('.page-footer > span').textContent = data.session.inference_status === 'blocked' ? 'Sensor replay · cloud inference pending' : 'Four-model ensemble · 10.24 s context · 320 ms finalization delay';
     if (data.gps.length) map.setView(data.gps[0].slice(1), 16, {animate: false});
     setFollow(true);
     seekTo(initialTime);
@@ -385,6 +404,43 @@ async function loadSession(id, initialTime = 0, autoplay = true, profile = $('pr
   }
 }
 
+function qualityColor(grade) { return ordinal ? ['#159c78', '#d2ae36', '#c95268'][grade] : COLORS[grade]; }
+function configureQuality() {
+  $('quality-unit').innerHTML = ordinal ? ' / 100<span class="unit-caption">roughness score</span>' : 'm/km<span class="unit-caption">estimated IRI</span>';
+  $('quality-title').textContent = ordinal ? 'Calibrated road quality' : 'Overall road quality';
+  document.querySelector('#model-chart').parentElement.querySelector('.axis-x').textContent = ordinal ? 'Quality score' : 'IRI';
+  const scale = document.querySelector('.quality-scale');
+  scale.querySelectorAll('span').forEach((el, i) => {el.hidden = ordinal && i === 3; el.style.background = qualityColor(i);});
+  const legend = document.querySelector('.map-legend');
+  legend.querySelectorAll('span').forEach(el => {if (el.textContent.trim() === 'Terrible') el.hidden = ordinal; if (el.textContent.trim() === 'Bad') el.querySelector('i').style.setProperty('--color',qualityColor(2));});
+  document.querySelector('.probability-track > span').title = ordinal ? 'Onset threshold: 70%' : 'Onset threshold: 60%';
+  document.querySelector('.probability-track > span').style.left = ordinal ? '70%' : '60%';
+}
+function renderVision() {
+  const vision = engine?.data.vision;
+  if (!vision) return;
+  const frame = visionFrameAt(vision, engine.time);
+  const key = frame ? `${engine.data.session.session_id}/${frame.frame_index}` : null;
+  if (key === visionImageKey) return;
+  visionImageKey = key;
+  const image = $('vision-image'), overlay = $('vision-boxes');
+  overlay.replaceChildren();
+  $('vision-empty').hidden = !!frame; image.hidden = !frame;
+  $('vision-time').textContent = frame ? `Video ${clock(frame.video_time_s,true)} · ${frame.detections.length} pothole detections` : 'No sampled video frame at this time';
+  if (!frame) return;
+  image.onload = () => { if (visionImageKey === key) image.style.opacity = '1'; };
+  image.style.opacity = '0';
+  image.src = `/api/session/${encodeURIComponent(engine.data.session.session_id)}/frames/${frame.frame_index}`;
+  document.querySelector('.vision-stage').style.maxWidth = `${Math.min(960, frame.width / frame.height * 720)}px`;
+  image.alt = `Road camera at ${clock(frame.video_time_s,true)}, ${frame.detections.length} pothole detections`;
+  for (const d of frame.detections) {
+    const [x1,y1,x2,y2] = d.box;
+    const box = document.createElement('div'); box.className = 'vision-box';
+    Object.assign(box.style,{left:`${100*x1/frame.width}%`,top:`${100*y1/frame.height}%`,width:`${100*(x2-x1)/frame.width}%`,height:`${100*(y2-y1)/frame.height}%`});
+    const label = document.createElement('span'); label.textContent = `${d.label} ${(d.conf*100).toFixed(0)}%`; box.append(label); overlay.append(box);
+  }
+}
+
 function paintQuality(row) {
   if (!row.is_final || !row.valid || !row.target_gps_valid) return;
   const index = row.target_gps_fix_index;
@@ -392,8 +448,8 @@ function paintQuality(row) {
   if (existing && existing.patch > row.target_patch) return;
   const fix = engine.data.gps[index], previous = engine.data.gps[index - 1];
   if (!fix) return;
-  const options = {color: COLORS[row.quality_grade], weight: 6, opacity: .88, pane: 'quality', renderer};
-  const tooltip = `${NAMES[row.quality_grade]} · ${row.iri_m_per_km.toFixed(2)} m/km<br>Target ${clock(row.start_s, true)} · final at ${clock(row.available_s, true)}`;
+  const options = {color: qualityColor(row.quality_grade), weight: 6, opacity: .88, pane: 'quality', renderer};
+  const tooltip = `${qualityText(row, ordinal)}<br>Target ${clock(row.start_s, true)} · final at ${clock(row.available_s, true)}`;
   if (existing) {
     existing.layer.setStyle(options).setTooltipContent(tooltip);
     existing.patch = row.target_patch;
@@ -438,7 +494,7 @@ function syncMap(changed, reset) {
     if (!row.valid || !row.target_gps_valid) continue;
     L.circleMarker([row.target_latitude_deg, row.target_longitude_deg], {
       radius: 5, color: '#758b68', fill: false, weight: 1.3, dashArray: '2,3', pane: 'alerts', renderer,
-    }).bindTooltip(`Provisional · ${row.iri_m_per_km.toFixed(2)} m/km<br>No final disturbance decision yet`).addTo(pendingLayer);
+    }).bindTooltip(`Provisional · ${qualityText(row, ordinal)}<br>No final disturbance decision yet`).addTo(pendingLayer);
   }
   const gps = engine.gps;
   if (!gps.valid) {
@@ -468,7 +524,7 @@ function seekTo(time) {
   const result = engine.seek(position);
   syncMap(result.changed, result.reset);
   modelRows = [...engine.visible.values()];
-  renderReadout(); drawCharts();
+  renderReadout(); drawCharts(); renderVision();
   if (engine.ended) setPlaying(false);
 }
 
@@ -494,12 +550,12 @@ function renderReadout() {
   } else {
     $('utc-clock').textContent = '—';
   }
-  const iri = final?.valid ? final.iri_m_per_km : null;
-  $('iri').textContent = iri == null ? '—' : iri.toFixed(2);
+  const iri = qualityValue(final, ordinal);
+  $('iri').textContent = iri == null ? '—' : iri.toFixed(ordinal ? 0 : 2);
   $('quality-badge').textContent = iri == null ? 'Waiting' : NAMES[final.quality_grade];
-  $('quality-badge').style.color = iri == null ? '#74886b' : COLORS[final.quality_grade];
-  $('quality-badge').style.background = iri == null ? '#edf4ee' : COLORS[final.quality_grade] + '14';
-  $('quality-pointer').style.left = `${iri == null ? 0 : Math.min(99, iri / 8 * 100)}%`;
+  $('quality-badge').style.color = iri == null ? '#74886b' : qualityColor(final.quality_grade);
+  $('quality-badge').style.background = iri == null ? '#edf4ee' : qualityColor(final.quality_grade) + '14';
+  $('quality-pointer').style.left = `${iri == null ? 0 : Math.min(99, iri / (ordinal ? 100 : 8) * 100)}%`;
   $('quality-note').textContent = final
     ? `Final for road time ${clock(final.start_s, true)}–${clock(final.end_s, true)}`
     : 'Waiting for the first finalized estimate';
@@ -608,7 +664,7 @@ function drawCharts() {
   drawSensors('acc-chart', ['accel_x', 'accel_y', 'accel_z']);
   drawSensors('gyro-chart', ['gyro_x', 'gyro_y', 'gyro_z']);
   const rows = modelRows.filter(row => row.end_s >= engine.time - 12);
-  const chart = canvasSetup($('model-chart'), 0, 8, true);
+  const chart = canvasSetup($('model-chart'), 0, ordinal ? 100 : 8, true);
   shadeEvents(chart);
   for (const provisional of [false, true]) {
     const use = rows.filter(row => row.is_final !== provisional).sort((a, b) => a.start_s - b.start_s);
@@ -616,11 +672,11 @@ function drawCharts() {
     const iri = [], probability = [];
     for (const row of use) {
       for (const time of [row.start_s, Math.min(row.end_s, engine.time)]) {
-        iri.push([time, row.valid ? row.iri_m_per_km : null]);
+        iri.push([time, qualityValue(row, ordinal)]);
         probability.push([time, row.valid ? row.probability : null]);
       }
     }
-    drawLine(chart, iri, '#289b7b', 0, 8, provisional);
+    drawLine(chart, iri, '#289b7b', 0, ordinal ? 100 : 8, provisional);
     drawLine(chart, probability, '#d08061', 0, 1, provisional);
   }
 }
@@ -632,6 +688,12 @@ $('profile').addEventListener('change', () => {
 });
 $('play').addEventListener('click', () => {if (engine?.ended) seekTo(0); setPlaying(!playing);});
 $('restart').addEventListener('click', () => {seekTo(0); setPlaying(false);});
+$('next-pothole').addEventListener('click', () => {
+  const vision = engine?.data.vision;
+  if (!vision || !Number.isFinite(vision.video_offset_s)) return;
+  const next = vision.frames.find(f => f.detections.length && f.video_time_s + vision.video_offset_s > engine.time + .04);
+  if (next) { setPlaying(false); seekTo(next.video_time_s + vision.video_offset_s + .001); $('vision-panel').scrollIntoView({behavior:'smooth',block:'center'}); }
+});
 $('next-event').addEventListener('click', () => {if (engine) {setPlaying(false); seekTo(engine.nextAlert());}});
 $('seek').addEventListener('input', event => {
   const target = Number(event.target.value); // Pausing redraws the slider.
@@ -685,12 +747,14 @@ try {
   const response = await fetch('/api/catalog');
   if (!response.ok) throw new Error(`Catalog request failed: HTTP ${response.status}`);
   catalog = await response.json();
-  for (const dataset of ['kaggle', 'lira_cd']) {
-    const group = document.createElement('optgroup'); group.label = dataset === 'kaggle' ? 'Kaggle Road Quality' : 'LiRA-CD · M13 test road';
+  $('session').replaceChildren();
+  for (const dataset of [...new Set(catalog.sessions.map(s => s.dataset))]) {
+    const group = document.createElement('optgroup');
+    group.label = dataset === 'user_jsonl' ? 'Your recordings' : dataset === 'kaggle' ? 'Kaggle Road Quality' : 'LiRA-CD';
     for (const session of catalog.sessions.filter(s => s.dataset === dataset)) {
       const option = document.createElement('option'); option.value = session.session_id; option.textContent = label(session); group.append(option);
     }
-    if (dataset === 'kaggle') $('session').replaceChildren(group); else $('session').append(group);
+    $('session').append(group);
   }
   $('session').disabled = false;
   $('profile').replaceChildren();

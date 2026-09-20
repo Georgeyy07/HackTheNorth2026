@@ -52,3 +52,13 @@
 .pothole-marker-icon{width:28px;height:28px;border-radius:50%;background:rgba(255,77,109,0.25);border:2px solid #ff4d6d;display:flex;align-items:center;justify-content:center;box-shadow:0 0 12px rgba(255,77,109,0.6);animation:markerPulse 2s infinite}
 @keyframes markerPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
 .pothole-marker-inner{width:10px;height:10px;background:#ff4d6d;border-radius:50%}
+
+.vision-panel{margin:18px 0;padding:20px;border:1px solid #dce3d9;border-radius:14px;background:white}
+.vision-panel[hidden]{display:none}.vision-panel p{font-size:12px;color:#647b71}
+.vision-stage{position:relative;max-width:960px;margin:auto;background:#12241e;min-height:100px}
+.vision-stage img{width:100%;display:block}.vision-stage img[hidden]{display:none}
+#vision-boxes{position:absolute;inset:0;pointer-events:none}.vision-box{position:absolute;border:2px solid #ff536e}
+.vision-box span{position:absolute;bottom:100%;left:-2px;background:#ff536e;color:white;font:12px sans-serif;padding:3px;white-space:nowrap}
+#vision-empty{padding:35px;text-align:center;color:white}.quality-scale span[hidden],.map-legend span[hidden]{display:none}
+
+.inference-status{padding:14px 18px;border:1px solid #d2ae36;border-radius:10px;background:#fff8e4;color:#735b17;font-size:14px}.inference-status[hidden]{display:none}
