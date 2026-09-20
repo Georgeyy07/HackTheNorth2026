@@ -19,6 +19,11 @@ function resolveApiBaseUrl() {
 
 export const API_BASE_URL = resolveApiBaseUrl();
 
+export function getWebSocketUrl(path = '/ws/imu') {
+  const wsBase = API_BASE_URL.replace(/^http/, 'ws');
+  return `${wsBase}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 async function request(path, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
