@@ -865,7 +865,24 @@ function syncReplayPotholes() {
 /**
  * Stop any running inspector animation loop and pause video
  */
+let inspectorFetch = null;
+let inspectorMedia = null;
+const imuWindowCache = new Map();
+async function fetchInspectorWindow(url) {
+  inspectorFetch?.abort();
+  inspectorFetch = new AbortController();
+  if (imuWindowCache.has(url)) return imuWindowCache.get(url);
+  const response = await fetch(url, {signal: inspectorFetch.signal});
+  if (!response.ok) throw new Error(`Telemetry unavailable (${response.status})`);
+  const data = await response.json();
+  imuWindowCache.set(url, data);
+  if (imuWindowCache.size > 48) imuWindowCache.delete(imuWindowCache.keys().next().value);
+  return data;
+}
+
 function stopInspectorLoop() {
+  inspectorFetch?.abort();
+  inspectorMedia?.abort();
   if (state.inspector.animId) {
     cancelAnimationFrame(state.inspector.animId);
     state.inspector.animId = null;
@@ -888,9 +905,7 @@ async function openNavigationHazard(hazard) {
   state.inspector.imuSamples = [];
   if (el.btnLiveFeed) el.btnLiveFeed.hidden = true;
   try {
-    const response = await fetch(`${API_BASE}/api/session/${encodeURIComponent(hazard.source_session)}/imu-window?time_s=${hazard.source_time_s}`);
-    if (!response.ok) throw new Error(`Recording unavailable (${response.status})`);
-    const source = await response.json();
+    const source = await fetchInspectorWindow(`${API_BASE}/api/session/${encodeURIComponent(hazard.source_session)}/imu-window?time_s=${hazard.source_time_s}`);
     if (!state.inspector.isOpen || token !== state.inspector.loadToken) return;
     openTelemetryInspectorForPoint(hazard.scout_id, hazard.source_time_s * 1000,
       ...hazard.coords, true, 'CRITICAL', source);
@@ -917,19 +932,23 @@ function closeTelemetryInspector() {
  */
 async function loadRealImuSamples(carID, centerTimeMs) {
   const token = state.inspector.loadToken;
+  // A moving replay can advance faster than a request completes. Do not abort
+  // this selection's in-flight refresh, or slow connections never get samples.
+  if (state.inspector.imuPendingToken === token) return;
+  state.inspector.imuPendingToken = token;
   try {
-    const resp = await fetch(`${API_BASE}/api/imu-samples?car_id=${encodeURIComponent(carID)}&timestamp=${centerTimeMs}&window_seconds=5.0`);
-    if (resp.ok) {
-      const data = await resp.json();
-      if (token !== state.inspector.loadToken || !state.inspector.isOpen) return;
-      if (data && Array.isArray(data.samples) && data.samples.length > 0) {
-        state.inspector.imuSamples = data.samples;
-        renderRealAccelerometer(state.inspector.relativeSec, state.inspector.severity);
-        return;
-      }
-    }
+    const data = await fetchInspectorWindow(`${API_BASE}/api/imu-samples?car_id=${encodeURIComponent(carID)}&timestamp=${centerTimeMs}&window_seconds=5.0`);
+    if (token !== state.inspector.loadToken || !state.inspector.isOpen) return;
+    state.inspector.imuSamples = data.samples || [];
+    state.inspector.sampleCenterMs = centerTimeMs;
+    renderRealAccelerometer(state.inspector.isIncident ? state.inspector.relativeSec :
+      (state.currentTimeMs-centerTimeMs)/1000, state.inspector.severity);
+    return;
   } catch (e) {
-    console.warn('Failed to load real IMU samples from simulated_car_imu_samples:', e);
+    if (e.name === 'AbortError') return;
+    console.warn('Failed to load IMU samples:', e);
+  } finally {
+    if (state.inspector.imuPendingToken === token) state.inspector.imuPendingToken = null;
   }
   if (token === state.inspector.loadToken) state.inspector.imuSamples = [];
 }
@@ -944,6 +963,8 @@ function prepareAndPlayIncidentClip() {
 
   state.inspector.loadToken++;
   const token = state.inspector.loadToken;
+  inspectorMedia = new AbortController();
+  const mediaSignal = inspectorMedia.signal;
 
   const vid = el.inspectorVideo;
   if (!vid) return;
@@ -969,7 +990,7 @@ function prepareAndPlayIncidentClip() {
   const source = state.inspector.source;
   const startTarget = source ? {
     session: source.session,
-    url: `/api/session/${encodeURIComponent(source.session)}/annotated.mp4`,
+    url: `/demo_view/videos/${encodeURIComponent(source.session)}.mp4`,
     currentTime: source.center_s - 5 - source.video_offset_s,
   } : resolveFleetVideo(sync, state.selectedScenario, state.inspector.carID, state.inspector.windowStartMs);
   const expectedUrl = startTarget.url || `/demo_view/videos/session2.mp4`;
@@ -984,9 +1005,16 @@ function prepareAndPlayIncidentClip() {
   }
 
   // Callback once the video has reached the target frame and is ready
+  let started = false;
   const onVideoReady = () => {
+    if (started || mediaSignal.aborted) return;
     if (token !== state.inspector.loadToken || !state.inspector.isOpen || !state.inspector.isIncident) return;
 
+    if (vid.readyState < 2) {
+      vid.addEventListener('canplay', onVideoReady, {once:true, signal:mediaSignal});
+      return;
+    }
+    started = true;
     if (el.inspectorBuffering) el.inspectorBuffering.style.display = 'none';
     vid.style.display = 'block';
     if (el.inspectorCanvas) el.inspectorCanvas.style.display = 'none';
@@ -1016,17 +1044,9 @@ function prepareAndPlayIncidentClip() {
         vid.removeEventListener('seeked', onSeeked);
         onVideoReady();
       };
-      vid.addEventListener('seeked', onSeeked, { once: true });
+      vid.addEventListener('seeked', onSeeked, { once: true, signal: mediaSignal });
       vid.currentTime = targetStartTime;
 
-      // Fallback timeout in case seeked event doesn't fire
-      setTimeout(() => {
-        if (!fired && token === state.inspector.loadToken && state.inspector.isOpen) {
-          fired = true;
-          vid.removeEventListener('seeked', onSeeked);
-          onVideoReady();
-        }
-      }, 1500);
     }
   };
 
@@ -1040,7 +1060,7 @@ function prepareAndPlayIncidentClip() {
     vid.addEventListener('loadedmetadata', () => {
       if (token !== state.inspector.loadToken) return;
       seekToStart();
-    }, { once: true });
+    }, { once: true, signal: mediaSignal });
     vid.src = expectedUrl;
     vid.load();
   } else {
@@ -1051,7 +1071,7 @@ function prepareAndPlayIncidentClip() {
       vid.addEventListener('loadedmetadata', () => {
         if (token !== state.inspector.loadToken) return;
         seekToStart();
-      }, { once: true });
+      }, { once: true, signal: mediaSignal });
     }
   }
 }
@@ -1169,6 +1189,8 @@ function openTelemetryInspectorForPoint(carID, timestamp, lat, lon, isIncident =
  * Open Inspector focused on a specific car (tracks car in real time)
  */
 function openTelemetryInspectorForCar(carID) {
+  state.inspector.imuSamples = [];
+  state.inspector.sampleCenterMs = null;
   state.inspector.source = null;
   if (el.btnLiveFeed) el.btnLiveFeed.hidden = false;
   const cfg = getVehicleConfig(carID);
@@ -1207,10 +1229,21 @@ function startLiveDrivingInspector() {
   vid.style.display = 'block';
   if (el.inspectorCanvas) el.inspectorCanvas.style.display = 'none';
 
+  inspectorMedia = new AbortController();
+  // Resolve against the current car clock when loading finishes, not the time
+  // at which the request began. Selection changes cancel these listeners.
+  for (const event of ['loadedmetadata', 'canplay', 'seeked']) {
+    vid.addEventListener(event, () => {
+      if (token === state.inspector.loadToken && state.inspector.isOpen && !state.inspector.isIncident) {
+        syncLiveInspectorVideo();
+      }
+    }, {signal: inspectorMedia.signal});
+  }
   syncLiveInspectorVideo(true);
+  loadRealImuSamples(state.inspector.carID, state.currentTimeMs);
 
+  let lastFetchTime = state.currentTimeMs;
   let lastTick = -Infinity;
-  let lastSamples;
   function liveTick(timestamp) {
     if (token !== state.inspector.loadToken || !state.inspector.isOpen || state.inspector.isIncident) {
       return;
@@ -1221,11 +1254,15 @@ function startLiveDrivingInspector() {
     if (timestamp - lastTick >= 100) {
       lastTick = timestamp;
       syncLiveInspectorVideo(false);
-      if (lastSamples !== state.inspector.imuSamples) {
-        lastSamples = state.inspector.imuSamples;
-        renderRealAccelerometer(0.0, state.inspector.severity);
+      if (state.inspector.imuPendingToken !== token && Math.abs(state.currentTimeMs - lastFetchTime) >= 1000) {
+        lastFetchTime = state.currentTimeMs;
+        loadRealImuSamples(state.inspector.carID, lastFetchTime);
       }
     }
+    // The cursor and values follow the same clock as the car every frame;
+    // fetching windows and correcting the native decoder can run less often.
+    renderRealAccelerometer((state.currentTimeMs - (state.inspector.sampleCenterMs ?? state.currentTimeMs))/1000,
+      state.inspector.severity);
 
     state.inspector.animId = requestAnimationFrame(liveTick);
   }
@@ -1256,33 +1293,36 @@ function syncLiveInspectorVideo(forceSeek = false) {
   // assigned URL so a slow load is not restarted on every animation frame.
   const sourceChanged = vid.src !== new URL(expectedUrl, document.baseURI).href;
 
+  if (forceSeek || sourceChanged) state.inspector.videoNeedsAlignment = true;
   if (sourceChanged) {
+    vid.pause();
     vid.src = expectedUrl;
     vid.load();
+  }
+
+  const shouldPlay = state.isPlaying && target.state === 'playing';
+  if (!shouldPlay && !vid.paused) vid.pause();
+  if (vid.readyState < 1 || vid.seeking) return;
+
+  const drift = target.currentTime - vid.currentTime;
+  // Preserve the initial alignment through metadata loading. Paused scrubs
+  // need frame-level accuracy; live playback tolerates only a small drift.
+  if (state.inspector.videoNeedsAlignment || Math.abs(drift) > (shouldPlay ? 0.4 : 0.04)) {
+    state.inspector.videoNeedsAlignment = false;
     vid.playbackRate = state.playbackSpeed;
-    if (vid.readyState >= 1) {
+    if (Math.abs(drift) > 0.02) {
       vid.currentTime = target.currentTime;
-    }
-    return;
-  }
-
-  if (vid.playbackRate !== state.playbackSpeed) {
-    vid.playbackRate = state.playbackSpeed;
-  }
-
-  if (vid.readyState >= 1) {
-    const drift = Math.abs(vid.currentTime - target.currentTime);
-    // Only seek if forced (scrub) or if drift is major (> 2.5s) to avoid decoder thrashing
-    if (forceSeek || (!vid.seeking && drift > 2.5)) {
-      vid.currentTime = target.currentTime;
-    }
-
-    if (state.isPlaying && target.state === 'playing') {
-      if (vid.paused) vid.play().catch(() => { });
-    } else {
-      if (!vid.paused) vid.pause();
+      return;
     }
   }
+
+  // Correct small decoder drift smoothly while the simulation remains the
+  // shared clock for the map, video target, and IMU sample cursor.
+  const correction = shouldPlay && Math.abs(drift) > 0.08
+    ? Math.max(-0.2, Math.min(0.2, drift * 0.5)) : 0;
+  const rate = state.playbackSpeed * (1 + correction);
+  if (Math.abs(vid.playbackRate - rate) > 0.01) vid.playbackRate = rate;
+  if (shouldPlay && vid.paused) vid.play().catch(() => {});
 }
 
 /**
@@ -1327,9 +1367,9 @@ function renderRealAccelerometer(relSec, severity) {
 
   if (samples && samples.length > 0) {
     // --- REAL DATABASE SAMPLES (simulated_car_imu_samples) ---
-    const pct = Math.max(0, Math.min(1, (relSec + 5.0) / 10.0));
-    const approxIdx = Math.max(0, Math.min(samples.length - 1, Math.round(pct * (samples.length - 1))));
-    const cur = samples[approxIdx];
+    let lo=0, hi=samples.length-1;
+    while(lo<hi){const mid=(lo+hi)>>1;if(samples[mid].rel_s<relSec)lo=mid+1;else hi=mid;}
+    const cur = samples[lo];
     curZ = cur.gz !== undefined ? cur.gz : cur.accel_z / 9.80665;
     curX = cur.gx !== undefined ? cur.gx : cur.accel_x / 9.80665;
     curY = cur.gy !== undefined ? cur.gy : cur.accel_y / 9.80665;
@@ -1376,11 +1416,12 @@ function renderRealAccelerometer(relSec, severity) {
     }
     ctx.stroke();
   } else {
-    // Fallback while database samples are loading
-    const dt = relSec;
-    curZ = 1.0 + Math.sin(dt * 12) * 0.07;
-    curX = Math.cos(dt * 7) * 0.04;
-    curY = Math.sin(dt * 5) * 0.04;
+    for (const [chip, axis] of [[el.chipAccelX,'X'],[el.chipAccelY,'Y'],[el.chipAccelZ,'Z']]) {
+      if (chip) chip.textContent = `${axis}: —`;
+    }
+    ctx.fillStyle = '#aaa';
+    ctx.fillText('Waiting for recorded IMU samples…', 12, 20);
+    return;
   }
 
   // Update Telemetry Badges with real values
@@ -1541,6 +1582,7 @@ function togglePlayPause() {
       cancelAnimationFrame(state.animationFrameId);
     }
   }
+  if (state.inspector.isOpen && !state.inspector.isIncident) syncLiveInspectorVideo();
 }
 
 /**

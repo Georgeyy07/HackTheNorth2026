@@ -15,6 +15,18 @@ Supply a directory containing `manifest.json` and the exported session folders.
 Alternatively set `ROAD_VIEWER_EXPORT` and use
 `uvicorn road_viewer.server:create_app --factory --port 8765`. Optional alert
 profile exports can be supplied with `--filters` or `ROAD_VIEWER_FILTERS`.
+For fast dashcam loading, build inspector previews after rendering recordings:
+
+```bash
+python -m scripts.build_video_previews --export artifacts/test_drive_inference
+```
+
+This creates small, muted H.264 previews with one-second seek points and the
+original video timeline. The demo serves these when available; original video
+downloads remain full resolution. Re-run after replacing recordings. Incomplete
+or stale previews are never served. MP4 responses bypass gzip and support byte
+ranges so the browser can fetch only the portion it needs.
+
 These artifacts are not checked into Git. `--host 0.0.0.0` allows access from
 another device on the same reachable network; the default is localhost.
 There is no authentication: use it as a local demo.

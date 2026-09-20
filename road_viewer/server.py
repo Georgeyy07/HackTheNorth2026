@@ -77,6 +77,16 @@ UPDATE_FIELDS += ["quality_probability", "quality_name", "quality_calibration_id
                   "calibration_id", "calibration_offset", "settling", "provider"]
 
 
+class VideoAwareGZipMiddleware(GZipMiddleware):
+    async def __call__(self, scope, receive, send):
+        # MP4 is already compressed. Gzipping byte ranges removes their length
+        # and forces needless compression/decompression while the decoder waits.
+        if scope["type"] == "http" and scope["path"].endswith(".mp4"):
+            await self.app(scope, receive, send)
+        else:
+            await super().__call__(scope, receive, send)
+
+
 def read(path):
     return json.loads(path.read_text())
 
@@ -148,7 +158,7 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)
+    app.add_middleware(VideoAwareGZipMiddleware, minimum_size=1024, compresslevel=4)
 
     @app.middleware("http")
     async def no_cache_for_static(request, call_next):
@@ -290,6 +300,10 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
             limit=limit,
         )
 
+    @lru_cache(maxsize=1)
+    def replay_sync():
+        return read(ROOT / "demo_view/videos/video_sync.json")
+
     @app.get("/api/simulated-car-imu-samples")
     @app.get("/api/imu-samples")
     def list_simulated_car_imu_samples(
@@ -298,6 +312,37 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
         window_seconds: float = 5.0,
         stride: int = 1,
     ):
+        # Frozen replay samples are also available locally. Use the exact fleet
+        # source-clock mapping; unknown cars retain the database-backed path.
+        sync_path = ROOT / "demo_view/videos/video_sync.json"
+        if sync_path.is_file() and car_id and timestamp and timestamp.replace(".", "", 1).isdigit():
+            sync = replay_sync()
+            car = next((c for variant in sync.get("variants", {}).values()
+                        for c in variant.get("cars", []) if c["carID"] == car_id), None)
+            if car and all((export / sid / "samples.parquet").is_file() and
+                           "timestamp_origin_unix_ns" in meta for sid, meta in sessions.items()):
+                center = float(timestamp)
+                if center < 1e11:
+                    center *= 1000
+                launch = pd.Timestamp(car["launch_timestamp"]).timestamp() * 1000
+                source_ms = car["source_start"]["source_us"] / 1000 + center - launch
+                radius = max(0.5, min(30., window_seconds))
+                windows = []
+                for sid, meta in sessions.items():
+                    origin = int(meta["timestamp_origin_unix_ns"]) / 1e6
+                    local_center = round((source_ms - origin) / 1000, 6)
+                    if local_center + radius < 0 or local_center - radius > meta["duration_s"]:
+                        continue
+                    frame, _ = recording_imu(sid)
+                    part = frame.loc[(frame.time_s >= local_center-radius) &
+                                     (frame.time_s <= local_center+radius)].copy()
+                    part["rel_s"] = part.time_s - local_center
+                    part["ts_ms"] = center + part.rel_s * 1000
+                    part["speed_mps"] = part.speed
+                    windows.append(part)
+                rows = pd.concat(windows).sort_values("ts_ms").iloc[::max(1, stride)] if windows else pd.DataFrame()
+                return {"car_id": car_id, "center_time_ms": center, "window_seconds": radius,
+                        "count": len(rows), "samples": json.loads(rows.to_json(orient="records"))}
         return get_simulated_car_imu_samples(
             car_id=car_id,
             timestamp=timestamp,
@@ -627,10 +672,17 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
         path = session_folder(session_id) / "annotated.mp4"
         if not path.is_file():
             raise HTTPException(404, "Annotated video is not available")
+        # The small inspector uses a seek-friendly preview. Full-resolution
+        # API playback and explicit downloads retain the original recording.
+        preview = path.with_name("annotated.preview.mp4")
+        if (request.url.path.startswith("/demo_view/") and not download and
+                preview.is_file() and preview.stat().st_mtime_ns >= path.stat().st_mtime_ns):
+            path = preview
         # The pinned Starlette version predates FileResponse byte-range support.
         # Serve ranges explicitly so the browser can seek long annotated clips.
         size = path.stat().st_size
-        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size),
+                   "Cache-Control": "public, max-age=300, no-transform"}
         range_header = request.headers.get("range")
         if not range_header or request.method == "HEAD":
             if request.method == "HEAD":
