@@ -115,5 +115,14 @@ def install_navigation_routes(app,here):
     def demo(mode:Literal['warning','reroute']='reroute'):
         return dict(**fixture(),replay=replay(mode),mode=mode)
 
+    @app.get('/api/navigation-audio/{clip}')
+    def notification_audio(clip: str):
+        if clip not in {'pothole_200m.mp3', 'rerouting.mp3'}:
+            raise HTTPException(404, 'Unknown notification')
+        path = here.parent / clip
+        if not path.is_file():
+            raise HTTPException(404, 'Notification audio unavailable')
+        return FileResponse(path, media_type='audio/mpeg')
+
     @app.get('/navigation-demo')
     def page():return FileResponse(here/'static/navigation.html',headers={'Cache-Control':'no-store'})

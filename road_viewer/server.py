@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Body, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Body, Request, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse, RedirectResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
@@ -604,6 +604,22 @@ def create_app(export=None, filters=None, inference_service=None, vision_service
         if not path.is_file():
             raise HTTPException(404, "Unknown frame")
         return FileResponse(path, media_type="image/jpeg")
+
+    @lru_cache(maxsize=4)
+    def recording_imu(session_id):
+        folder = session_folder(session_id)
+        samples = pd.read_parquet(folder / "samples.parquet",
+                                  columns=["time_s", "accel_x", "accel_y", "accel_z", "speed"])
+        vision = read(folder / "vision.json")
+        return samples, float(vision["video_offset_s"])
+
+    @app.get("/api/session/{session_id}/imu-window")
+    def recording_imu_window(session_id: str, time_s: float = Query(ge=0, allow_inf_nan=False)):
+        samples, video_offset = recording_imu(session_id)
+        window = samples.loc[(samples.time_s >= time_s - 5) & (samples.time_s <= time_s + 5)].copy()
+        window["rel_s"] = window.time_s - time_s
+        return {"session": session_id, "center_s": time_s, "video_offset_s": video_offset,
+                "samples": json.loads(window.to_json(orient="records"))}
 
     @app.api_route("/demo_view/videos/{session_id}.mp4", methods=["GET", "HEAD"])
     @app.api_route("/api/session/{session_id}/annotated.mp4", methods=["GET", "HEAD"])

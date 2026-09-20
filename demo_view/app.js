@@ -7,6 +7,12 @@
  */
 
 import { resolveFleetVideo } from './fleet-video-sync.js';
+import { createNavigationScenario } from './navigation-scenario.js';
+
+let navigationScenario = null;
+let scenarioLoadVersion = 0;
+let scenarioLoading = false;
+window.navigationSnapshot = () => navigationScenario?.snapshot() || null;
 
 const API_BASE = window.location.port === '8888' ? 'http://localhost:8765' : window.location.origin;
 
@@ -244,6 +250,7 @@ function initMap() {
     zoomControl: false,
   });
 
+  map.on('click', closeTelemetryInspector);
   L.control.zoom({ position: 'topleft' }).addTo(map);
 
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -268,14 +275,56 @@ function initMap() {
  * Fetch observations from simulated_car_observations and active potholes
  */
 async function loadObservationsData() {
+  const version = ++scenarioLoadVersion;
+  const scenario = state.selectedScenario;
+  scenarioLoading = true;
+  state.isPlaying = false;
+  cancelAnimationFrame(state.animationFrameId);
+  if (el.playPauseText) el.playPauseText.textContent = '▶ Play Replay';
+  closeTelemetryInspector();
+  navigationScenario?.dispose();
+  navigationScenario = null;
+  for (const layer of [trailLayer, carLayer, potholeLayer]) layer?.clearLayers();
+  potholeMarkers.clear();
+  state.vehicleRoutes.clear();
+  state.vehicleSegments.clear();
+  state.potholes = [];
+  state.allObservations = [];
+  const isNavigation = ['warning', 'reroute'].includes(scenario);
+  if (el.vehicleFilter) el.vehicleFilter.disabled = isNavigation;
+  document.getElementById('nav-voice').onchange = () => navigationScenario?.stopAudio();
   try {
+    if (isNavigation) {
+      if (el.dbStatusText) el.dbStatusText.textContent = 'Loading navigation scenario…';
+      const response = await fetch(`${API_BASE}/api/navigation-demo?mode=${scenario}`);
+      if (!response.ok) throw new Error(`Scenario HTTP ${response.status}`);
+      const data = await response.json();
+      if (version !== scenarioLoadVersion) return;
+      navigationScenario = createNavigationScenario(map, data, openNavigationHazard);
+      state.startTimeMs = 0;
+      state.currentTimeMs = 0;
+      state.endTimeMs = navigationScenario.duration * 1000;
+      el.timelineSlider.max = state.endTimeMs;
+      el.timelineSlider.min = 0;
+      el.timelineSlider.value = 0;
+      el.totalTimeLabel.textContent = formatDuration(state.endTimeMs);
+      el.currentTimeLabel.textContent = '00:00';
+      el.statVehicles.textContent = `You + ${data.scouts.length} scouts`;
+      el.statWaypoints.textContent = 'A → B';
+      el.statAnomalies.textContent = '0';
+      el.dbStatusText.textContent = 'Navigation demonstration · recorded fleet reports';
+      populateDrawerTables();
+      return;
+    }
     if (el.dbStatusText) el.dbStatusText.textContent = 'Connecting...';
 
     // 1. Fetch Fleet Video Sync manifest
     try {
       const syncRes = await fetch(`${API_BASE}/api/fleet-sync`);
       if (syncRes.ok) {
-        state.syncManifest = await syncRes.json();
+        const manifest = await syncRes.json();
+        if (version !== scenarioLoadVersion) return;
+        state.syncManifest = manifest;
       }
     } catch (e) {
       console.warn('Could not load fleet-sync manifest:', e);
@@ -286,8 +335,10 @@ async function loadObservationsData() {
     const obsRes = await fetch(obsUrl);
     if (!obsRes.ok) throw new Error(`HTTP ${obsRes.status}`);
     const rawObs = await obsRes.json();
+    if (version !== scenarioLoadVersion) return;
     state.allObservations = rawObs;
 
+    scenarioLoading = false;
     // The persistent database contains discoveries from the entire drive.
     // Replay markers are reconstructed from timestamped observations instead.
     if (el.dbStatusText) el.dbStatusText.textContent = 'TigerDB (simulated_car_observations)';
@@ -296,7 +347,9 @@ async function loadObservationsData() {
     populateDrawerTables();
   } catch (err) {
     console.error('Failed to load observations data:', err);
-    if (el.dbStatusText) el.dbStatusText.textContent = 'Error loading observations';
+    if (version === scenarioLoadVersion && el.dbStatusText) el.dbStatusText.textContent = 'Error loading scenario';
+  } finally {
+    if (version === scenarioLoadVersion) scenarioLoading = false;
   }
 }
 
@@ -616,7 +669,15 @@ function renderPotholes() {
 /**
  * Core Playback Render: updates vehicle markers & persistent trails with zero lag!
  */
-function updateMapToCurrentTime() {
+function updateMapToCurrentTime(announce = false) {
+  if (scenarioLoading) return;
+  if (navigationScenario) {
+    navigationScenario.render(state.currentTimeMs / 1000, announce);
+    el.timelineSlider.value = state.currentTimeMs;
+    const label = formatDuration(state.currentTimeMs);
+    if (el.currentTimeLabel.textContent !== label) el.currentTimeLabel.textContent = label;
+    return;
+  }
   syncReplayPotholes();
   const cars = Array.from(state.vehicleRoutes.keys()).sort();
 
@@ -817,7 +878,32 @@ function stopInspectorLoop() {
 /**
  * Close the inspector drawer/panel
  */
+async function openNavigationHazard(hazard) {
+  closeTelemetryInspector();
+  const token = ++state.inspector.loadToken;
+  state.inspector.isOpen = true;
+  el.telemetryInspector.style.display = 'flex';
+  el.inspectorSubtitle.textContent = `Loading ${hazard.source_session} at ${hazard.source_time_s.toFixed(2)}s…`;
+  el.inspectorVideo.style.display = 'none';
+  state.inspector.imuSamples = [];
+  if (el.btnLiveFeed) el.btnLiveFeed.hidden = true;
+  try {
+    const response = await fetch(`${API_BASE}/api/session/${encodeURIComponent(hazard.source_session)}/imu-window?time_s=${hazard.source_time_s}`);
+    if (!response.ok) throw new Error(`Recording unavailable (${response.status})`);
+    const source = await response.json();
+    if (!state.inspector.isOpen || token !== state.inspector.loadToken) return;
+    openTelemetryInspectorForPoint(hazard.scout_id, hazard.source_time_s * 1000,
+      ...hazard.coords, true, 'CRITICAL', source);
+    el.inspectorBadge.textContent = `${hazard.scout_id} · ${source.session}`;
+    el.inspectorSubtitle.textContent = `Recorded ${source.session} · ${source.center_s.toFixed(2)}s · ±5s`;
+  } catch (error) {
+    if (token === state.inspector.loadToken && state.inspector.isOpen) el.inspectorSubtitle.textContent = error.message;
+  }
+}
+
 function closeTelemetryInspector() {
+  state.inspector.source = null;
+  if (el.btnLiveFeed) el.btnLiveFeed.hidden = false;
   state.inspector.isOpen = false;
   state.inspector.isIncident = false;
   state.inspector.loadToken++;
@@ -830,10 +916,12 @@ function closeTelemetryInspector() {
  * Fetch real high-frequency telemetry from PostgreSQL table: simulated_car_imu_samples
  */
 async function loadRealImuSamples(carID, centerTimeMs) {
+  const token = state.inspector.loadToken;
   try {
     const resp = await fetch(`${API_BASE}/api/imu-samples?car_id=${encodeURIComponent(carID)}&timestamp=${centerTimeMs}&window_seconds=5.0`);
     if (resp.ok) {
       const data = await resp.json();
+      if (token !== state.inspector.loadToken || !state.inspector.isOpen) return;
       if (data && Array.isArray(data.samples) && data.samples.length > 0) {
         state.inspector.imuSamples = data.samples;
         renderRealAccelerometer(state.inspector.relativeSec, state.inspector.severity);
@@ -843,7 +931,7 @@ async function loadRealImuSamples(carID, centerTimeMs) {
   } catch (e) {
     console.warn('Failed to load real IMU samples from simulated_car_imu_samples:', e);
   }
-  state.inspector.imuSamples = [];
+  if (token === state.inspector.loadToken) state.inspector.imuSamples = [];
 }
 
 /**
@@ -873,11 +961,17 @@ function prepareAndPlayIncidentClip() {
   renderRealAccelerometer(-5.0, state.inspector.severity);
 
   // Fetch real database IMU records for this vehicle in the ±5.0s window
-  loadRealImuSamples(state.inspector.carID, state.inspector.centerTimeMs);
+  if (state.inspector.source) state.inspector.imuSamples = state.inspector.source.samples;
+  else loadRealImuSamples(state.inspector.carID, state.inspector.centerTimeMs);
 
   // Compute start video position from sync manifest (-5.0s from impact center)
   const sync = state.syncManifest;
-  const startTarget = resolveFleetVideo(sync, state.selectedScenario, state.inspector.carID, state.inspector.windowStartMs);
+  const source = state.inspector.source;
+  const startTarget = source ? {
+    session: source.session,
+    url: `/api/session/${encodeURIComponent(source.session)}/annotated.mp4`,
+    currentTime: source.center_s - 5 - source.video_offset_s,
+  } : resolveFleetVideo(sync, state.selectedScenario, state.inspector.carID, state.inspector.windowStartMs);
   const expectedUrl = startTarget.url || `/demo_view/videos/session2.mp4`;
   const targetStartTime = Math.max(0, startTarget.currentTime);
 
@@ -1021,7 +1115,10 @@ function startIncidentLoop(token) {
 /**
  * Open Inspector focused on a specific road point or pothole impact (±5.0s window)
  */
-function openTelemetryInspectorForPoint(carID, timestamp, lat, lon, isIncident = true, sev = 'CRITICAL') {
+function openTelemetryInspectorForPoint(carID, timestamp, lat, lon, isIncident = true, sev = 'CRITICAL', source = null) {
+  state.inspector.source = source;
+  state.inspector.imuSamples = source?.samples || [];
+  if (el.btnLiveFeed) el.btnLiveFeed.hidden = Boolean(source);
   let chosenCar = carID;
   let chosenTs = timestamp;
 
@@ -1072,6 +1169,8 @@ function openTelemetryInspectorForPoint(carID, timestamp, lat, lon, isIncident =
  * Open Inspector focused on a specific car (tracks car in real time)
  */
 function openTelemetryInspectorForCar(carID) {
+  state.inspector.source = null;
+  if (el.btnLiveFeed) el.btnLiveFeed.hidden = false;
   const cfg = getVehicleConfig(carID);
   state.inspector.isOpen = true;
   state.inspector.carID = carID;
@@ -1412,11 +1511,11 @@ function playbackLoop(timestamp) {
     state.currentTimeMs = state.endTimeMs;
     state.isPlaying = false;
     if (el.playPauseText) el.playPauseText.textContent = '▶ Play Replay';
-    updateMapToCurrentTime();
+    updateMapToCurrentTime(true);
     return;
   }
 
-  updateMapToCurrentTime();
+  updateMapToCurrentTime(true);
   state.animationFrameId = requestAnimationFrame(playbackLoop);
 }
 
@@ -1424,6 +1523,7 @@ function playbackLoop(timestamp) {
  * Toggle Play / Pause
  */
 function togglePlayPause() {
+  if (scenarioLoading) return;
   state.isPlaying = !state.isPlaying;
   if (state.isPlaying) {
     if (state.currentTimeMs >= state.endTimeMs) {
@@ -1435,6 +1535,7 @@ function togglePlayPause() {
     if (el.playPauseText) el.playPauseText.textContent = '⏸ Pause Replay';
     state.animationFrameId = requestAnimationFrame(playbackLoop);
   } else {
+    navigationScenario?.stopAudio();
     if (el.playPauseText) el.playPauseText.textContent = '▶ Play Replay';
     if (state.animationFrameId) {
       cancelAnimationFrame(state.animationFrameId);
@@ -1446,6 +1547,7 @@ function togglePlayPause() {
  * Reset Replay
  */
 function resetReplay() {
+  navigationScenario?.stopAudio();
   state.isPlaying = false;
   if (el.playPauseText) el.playPauseText.textContent = '▶ Play Replay';
   if (state.animationFrameId) {
@@ -1461,6 +1563,14 @@ function resetReplay() {
  * Jump to Next Anomaly
  */
 function jumpToNextAnomaly() {
+  if (scenarioLoading) return;
+  if (navigationScenario) {
+    navigationScenario.stopAudio();
+    const next = navigationScenario.nextEvent(state.currentTimeMs / 1000);
+    state.currentTimeMs = next === undefined ? 0 : Math.max(0, (next - 2) * 1000);
+    updateMapToCurrentTime();
+    return;
+  }
   const allAnomalies = state.allObservations
     .filter((d) => d.imu_defect_detected && d.yolo_pothole_detected)
     .sort((a, b) => a.timestamp - b.timestamp);
@@ -1649,10 +1759,13 @@ function wireEvents() {
 
   if (el.timelineSlider) {
     el.timelineSlider.addEventListener('input', (e) => {
+      if (scenarioLoading) return;
+      navigationScenario?.stopAudio();
       const elapsed = parseInt(e.target.value, 10);
       state.currentTimeMs = state.startTimeMs + elapsed;
       invalidateSegmentCaches();
       updateMapToCurrentTime();
+      if (state.inspector.isOpen && navigationScenario) closeTelemetryInspector();
       if (state.inspector.isOpen) {
         if (state.inspector.isIncident) {
           state.inspector.centerTimeMs = state.currentTimeMs;
